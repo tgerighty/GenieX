@@ -49,7 +49,9 @@ static float scalar_dot(unsigned ct, unsigned row, const uint8_t *q8) {
             }
         }
         const __fp16 *scales = (const __fp16 *)(q8 + K);
-        for (unsigned b = 0; b < 4; ++b) total += sum[b] * (float)scales[kb * 4 + b];
+        float block_total = 0.0f;
+        for (unsigned b = 0; b < 4; ++b) block_total += sum[b] * (float)scales[kb * 4 + b];
+        total += geniex_ptq1_half_to_float(w->d[row]) * block_total;
     }
     return total;
 }
@@ -65,7 +67,7 @@ int main(void) {
             seed = seed * 1664525u + 1013904223u;
             blocks[row].qh[k] = seed >> 24;
         }
-        blocks[row].d = 0x3c00;
+        blocks[row].d = 0x3800 + (row % 3) * 0x400;
     }
     for (unsigned ct = 0; ct < TILES; ++ct) {
         for (unsigned kb = 0; kb < KB; ++kb) {
