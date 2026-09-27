@@ -21,9 +21,10 @@ flags=(-mcpu=v75 -mv75 -mhvx=v75 -mhmx -O2)
 if [[ ${2:-} == --worker ]]; then
     worker_k=${PTQ1_WORKER_K:-256}
     worker_m=${PTQ1_WORKER_M:-3}
+    worker_repeats=${PTQ1_WORKER_REPEATS:-1}
     includes+=(-I"$prism_htp/.." -I"$prism_htp/../..")
     "$tools/hexagon-clang" "${includes[@]}" "${flags[@]}" -fpic -ffunction-sections -fdata-sections \
-        -DPTQ1_WORKER_K="$worker_k" -DPTQ1_WORKER_M="$worker_m" \
+        -DPTQ1_WORKER_K="$worker_k" -DPTQ1_WORKER_M="$worker_m" -DPTQ1_WORKER_REPEATS="$worker_repeats" \
         -c "$here/ptq1_worker_sim.c" -o "$build_dir/worker.o"
     "$tools/hexagon-clang" "${flags[@]}" -Wl,--gc-sections \
         "$build_dir/worker.o" "$build_dir/queue.o" -lm -o "$build_dir/worker.elf"
@@ -31,7 +32,7 @@ if [[ ${2:-} == --worker ]]; then
         printf '%s\n' "$output" >&2
         exit 1
     fi
-    grep -F "PTQ1 worker K=$worker_k M=$worker_m checksum " <<< "$output"
+    grep -F "PTQ1 worker K=$worker_k M=$worker_m repeats=$worker_repeats checksum " <<< "$output"
     grep -F 'Total: Insns=' <<< "$output"
     exit 0
 fi

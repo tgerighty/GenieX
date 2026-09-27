@@ -14,6 +14,9 @@ bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void *data, un
 #ifndef PTQ1_WORKER_M
 #define PTQ1_WORKER_M 3
 #endif
+#ifndef PTQ1_WORKER_REPEATS
+#define PTQ1_WORKER_REPEATS 1
+#endif
 enum { K = PTQ1_WORKER_K, M = PTQ1_WORKER_M, N = 81, ROW_STRIDE = N + 16, TILES = 3, KB = K / GENIEX_PTQ1_BLOCK_K };
 
 static geniex_ptq1_tile weights[TILES][KB] __attribute__((aligned(128)));
@@ -105,7 +108,9 @@ int main(void) {
     ctx.vtcm_base = vtcm;
     ctx.vtcm_size = layout.total_bytes;
     ctx.dma[0] = dma_queue_init(queue_storage, 8, (uintptr_t)(vtcm + layout.off_src0), layout.src0_bytes, &ctx.trace[0]);
-    if (hvx_mm_matmul(&octx) != HTP_STATUS_OK) return 2;
+    for (unsigned repeat = 0; repeat < PTQ1_WORKER_REPEATS; ++repeat) {
+        if (hvx_mm_matmul(&octx) != HTP_STATUS_OK) return 2;
+    }
     for (unsigned i = 0; i < 128; ++i) if (vtcm[layout.total_bytes + i] != 0xa5) return 3;
     float checksum = 0.0f;
     for (unsigned ir = 0; ir < M; ++ir) {
@@ -126,6 +131,6 @@ int main(void) {
             checksum += outputs[ir][n];
         }
     }
-    printf("PTQ1 worker K=%d M=%d checksum %.1f\n", K, M, checksum);
+    printf("PTQ1 worker K=%d M=%d repeats=%d checksum %.1f\n", K, M, PTQ1_WORKER_REPEATS, checksum);
     return 0;
 }
