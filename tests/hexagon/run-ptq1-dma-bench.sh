@@ -18,6 +18,24 @@ flags=(-mcpu=v75 -mv75 -mhvx=v75 -mhmx -O2)
 "$tools/hexagon-sim" --march v75na_1 -r "$build_dir/layout.elf" | grep -Fx 'PTQ1 output layout passed'
 "$tools/hexagon-clang" "${includes[@]}" "${flags[@]}" -fpic -c "$prism_htp/dma-queue.c" -o "$build_dir/queue.o"
 
+if [[ ${2:-} == --worker ]]; then
+    worker_k=${PTQ1_WORKER_K:-256}
+    worker_m=${PTQ1_WORKER_M:-3}
+    includes+=(-I"$prism_htp/.." -I"$prism_htp/../..")
+    "$tools/hexagon-clang" "${includes[@]}" "${flags[@]}" -fpic -ffunction-sections -fdata-sections \
+        -DPTQ1_WORKER_K="$worker_k" -DPTQ1_WORKER_M="$worker_m" \
+        -c "$here/ptq1_worker_sim.c" -o "$build_dir/worker.o"
+    "$tools/hexagon-clang" "${flags[@]}" -Wl,--gc-sections \
+        "$build_dir/worker.o" "$build_dir/queue.o" -lm -o "$build_dir/worker.elf"
+    if ! output=$("$tools/hexagon-sim" --march v75na_1 -r "$build_dir/worker.elf" 2>&1); then
+        printf '%s\n' "$output" >&2
+        exit 1
+    fi
+    grep -F "PTQ1 worker K=$worker_k M=$worker_m checksum " <<< "$output"
+    grep -F 'Total: Insns=' <<< "$output"
+    exit 0
+fi
+
 for variant in single pair; do
     define=()
     if [[ $variant == pair ]]; then define=(-DPTQ1_DMA_PAIR); fi
