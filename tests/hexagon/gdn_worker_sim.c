@@ -32,7 +32,7 @@ bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void * data, u
 #define GDN_FAULT_STATE_NO_DELTA 0
 #endif
 
-enum { S = GDN_S, H = GDN_H, T = GDN_T, MAX_S = 128, MAX_H = 32, MAX_T = 2 };
+enum { S = GDN_S, H = GDN_H, T = GDN_T, MAX_S = 128, MAX_H = 48, MAX_T = 2 };
 _Static_assert(S > 0 && S <= MAX_S && H > 0 && H <= MAX_H && T > 0 && T <= MAX_T, "test shape");
 
 static float q_data[MAX_T * MAX_H * MAX_S] __attribute__((aligned(128)));
