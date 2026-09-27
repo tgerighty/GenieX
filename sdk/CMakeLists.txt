@@ -31,6 +31,10 @@ option(GENIEX_PLUGIN_LLAMA_CPP  "Enable llama.cpp backend"       ON)
 option(GENIEX_PLUGIN_QAIRT      "Enable QAIRT backend"           ON)
 option(GENIEX_BENCHMARK         "Build benchmark example"        OFF)
 option(GENIEX_CPU_ONLY          "CPU inference only, baseline ISA" OFF)
+option(GENIEX_PRISM_PTQ1_HEXAGON "Apply Prism PTQ1_0 Hexagon matvec patch" OFF)
+set(GENIEX_LLAMA_CPP_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../third-party/llama.cpp" CACHE PATH "llama.cpp source directory")
+get_filename_component(_LLAMA_DIR "${GENIEX_LLAMA_CPP_SOURCE}" REALPATH BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+get_filename_component(_LLAMA_VENDORED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third-party/llama.cpp" REALPATH)
 
 message(STATUS "=============== Options ===============")
 message(STATUS "GENIEX_VERSION:          ${GENIEX_VERSION}")
@@ -169,15 +173,25 @@ enable_testing()
 #   gpu/hybrid models have loaded in one process); upstream's own
 #   GGML_OPENCL_ADRENO_XMEM_GEMM=0 override confirms the fix.
 if(GENIEX_PLUGIN_LLAMA_CPP)
-    set(_LLAMA_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/../third-party/llama.cpp")
     set(_LLAMA_PATCHES)
-    if(GGML_HEXAGON)
+    if(GENIEX_PRISM_PTQ1_HEXAGON)
+        if(NOT GGML_HEXAGON OR _LLAMA_DIR STREQUAL _LLAMA_VENDORED_DIR)
+            message(FATAL_ERROR "GENIEX_PRISM_PTQ1_HEXAGON needs GGML_HEXAGON and an external Prism llama.cpp source")
+        endif()
+        set(GENIEX_PTQ1_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/hexagon")
+        set(_PTQ1_PATCH "${CMAKE_CURRENT_SOURCE_DIR}/patches/prism-ptq1-hexagon.patch")
+        if(NOT EXISTS "${_PTQ1_PATCH}")
+            message(FATAL_ERROR "Missing Prism PTQ1_0 patch: ${_PTQ1_PATCH}")
+        endif()
+        list(APPEND _LLAMA_PATCHES "${_PTQ1_PATCH}")
+    endif()
+    if(GGML_HEXAGON AND _LLAMA_DIR STREQUAL _LLAMA_VENDORED_DIR)
         list(APPEND _LLAMA_PATCHES
             "${CMAKE_CURRENT_SOURCE_DIR}/patches/llama-hexagon-release-sessions.patch"
             "${CMAKE_CURRENT_SOURCE_DIR}/patches/llama-hexagon-power-mode.patch"
             "${CMAKE_CURRENT_SOURCE_DIR}/patches/llama-hexagon-power-mode-setter.patch")
     endif()
-    if(GGML_OPENCL)
+    if(GGML_OPENCL AND _LLAMA_DIR STREQUAL _LLAMA_VENDORED_DIR)
         list(APPEND _LLAMA_PATCHES
             "${CMAKE_CURRENT_SOURCE_DIR}/patches/llama-opencl-adreno-cpy-constreg.patch"
             "${CMAKE_CURRENT_SOURCE_DIR}/patches/llama-zero-free-mem-even-split.patch"

@@ -22,7 +22,7 @@ if(WIN32 AND CMAKE_C_COMPILER_ID MATCHES "Clang")
 endif()
 
 add_subdirectory(
-    ../../../third-party/llama.cpp
+    ${_LLAMA_DIR}
     ${CMAKE_BINARY_DIR}/third-party/llama.cpp
     EXCLUDE_FROM_ALL)
 

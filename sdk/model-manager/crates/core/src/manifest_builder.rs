@@ -123,7 +123,7 @@ pub fn infer_manifest_from_names(
 
     // MMProj: 0 -> try single onnx/geniex; 1 -> use; >1 -> prefer FP16 over
     // BF16/F32/etc, then largest.
-    let mmproj_file = match mmprojs.len() {
+    let mut mmproj_file = match mmprojs.len() {
         0 => {
             if onnx_files.len() == 1 {
                 file_info(onnx_files[0], sizes)
@@ -148,6 +148,11 @@ pub fn infer_manifest_from_names(
         }
     };
 
+    let model_type = infer_model_type(&hint, file_names);
+    if model_type == ModelType::Llm && !mmprojs.is_empty() {
+        mmproj_file = ModelFileInfo::default();
+    }
+
     // Tokenizer: 0 -> none; 1 -> use; >1 -> error (ambiguous).
     let tokenizer_file = match tokenizers.len() {
         0 => ModelFileInfo::default(),
@@ -171,8 +176,6 @@ pub fn infer_manifest_from_names(
             .filter(|n| mmproj_file.name != ***n)
             .map(|n| file_info(n, sizes)),
     );
-
-    let model_type = infer_model_type(&hint, file_names);
 
     // Derive model_name: last path component of `name`, with -GGUF suffix
     // stripped. e.g. "Qwen/Qwen3-4B-GGUF" -> "Qwen3-4B".
@@ -363,7 +366,7 @@ pub(crate) fn untagged_gguf_names(file_names: &[String]) -> Vec<&String> {
         .collect()
 }
 
-/// Extract a quant tag like `Q4_K_M`, `IQ4_XS`, `TQ1_0`, `MXFP4`, `F16`,
+/// Extract a quant tag like `Q4_K_M`, `IQ4_XS`, `TQ1_0`, `PTQ1_0`, `PQ2_0`, `MXFP4`, `F16`,
 /// `FP16`, `BF16`, or `I8` from a filename. Case-insensitive; the returned
 /// tag is upper-cased. Returns the highest-priority match if multiple are
 /// present, else the first match, else None.
@@ -395,11 +398,15 @@ pub(crate) fn extract_quant(name: &str) -> Option<String> {
         if matched {
             continue;
         }
-        // Optional 1-byte prefix used by i-quants (`IQ*`) and ternary
-        // quants (`TQ*`). Anything else means this token isn't a quant.
+        // Optional prefixes used by i-quants, ternary quants, and Prism quants.
         let mut j = i;
         if (bytes[j] == b'I' || bytes[j] == b'T') && j + 1 < bytes.len() && bytes[j + 1] == b'Q' {
             j += 1;
+        } else if bytes[j] == b'P' {
+            j += 1;
+            if j < bytes.len() && bytes[j] == b'T' {
+                j += 1;
+            }
         }
         if !(j < bytes.len()
             && bytes[j] == b'Q'
@@ -491,10 +498,15 @@ mod tests {
 
     #[test]
     fn quant_sort_key_ranks_priority_first_then_alphabetical() {
-        let mut tags = vec!["Q8_0", "IQ4_XS", "Q4_K_M", "BF16", "Q4_0"];
+        let mut tags = vec![
+            "Q8_0", "IQ4_XS", "Q4_K_M", "BF16", "Q4_0", "PTQ1_0", "PQ2_0",
+        ];
         tags.sort_by(|a, b| quant_sort_key(a).cmp(&quant_sort_key(b)));
         // An unlisted tag never outranks a listed one by sorting earlier.
-        assert_eq!(tags, vec!["Q4_0", "Q4_K_M", "Q8_0", "BF16", "IQ4_XS"]);
+        assert_eq!(
+            tags,
+            vec!["Q4_0", "Q4_K_M", "Q8_0", "BF16", "IQ4_XS", "PQ2_0", "PTQ1_0"]
+        );
     }
 
     fn sizes_of(names: &[(&str, i64)]) -> (Vec<String>, HashMap<String, i64>) {
@@ -542,6 +554,44 @@ mod tests {
         );
         assert_eq!(extract_quant("model-iq1_s.gguf"), Some("IQ1_S".to_string()));
         assert_eq!(extract_quant("model-TQ1_0.gguf"), Some("TQ1_0".to_string()));
+        assert_eq!(
+            extract_quant("model-PTQ1_0.gguf"),
+            Some("PTQ1_0".to_string())
+        );
+        assert_eq!(extract_quant("model-PQ2_0.gguf"), Some("PQ2_0".to_string()));
+    }
+
+    #[test]
+    fn bonsai2_text_only_selects_ptq1_without_projector() {
+        let (names, sizes) = sizes_of(&[
+            ("Ternary-Bonsai-2-27B-F16.gguf", 53_800_000_000),
+            ("Ternary-Bonsai-2-27B-PQ2_0.gguf", 7_210_000_000),
+            ("Ternary-Bonsai-2-27B-PTQ1_0.gguf", 5_950_000_000),
+            ("Ternary-Bonsai-2-27B-mmproj-BF16.gguf", 931_000_000),
+        ]);
+        let hint = ManifestHint {
+            model_type: Some(ModelType::Llm),
+            quant: Some("PTQ1_0".to_string()),
+            ..Default::default()
+        };
+        let manifest =
+            infer_manifest_from_names("prism-ml/Ternary-Bonsai-2-27B-gguf", &names, &sizes, hint)
+                .unwrap();
+        assert_eq!(manifest.model_type, ModelType::Llm);
+        assert_eq!(manifest.model_file.len(), 1);
+        assert!(manifest.model_file.contains_key("PTQ1_0"));
+        assert!(manifest.mmproj_file.name.is_empty());
+        assert_eq!(manifest.total_size(), 5_950_000_000);
+    }
+
+    #[test]
+    fn standalone_qairt_projectors_remain_selected() {
+        for filename in ["model.onnx", "model.geniex"] {
+            let (names, sizes) = sizes_of(&[(filename, 1024)]);
+            let manifest =
+                infer_manifest_from_names("model", &names, &sizes, Default::default()).unwrap();
+            assert_eq!(manifest.mmproj_file.name, filename);
+        }
     }
 
     #[test]

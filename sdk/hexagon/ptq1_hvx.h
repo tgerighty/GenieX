@@ -1,0 +1,206 @@
+// SPDX-License-Identifier: BSD-3-Clause
+#ifndef GENIEX_PTQ1_HVX_H
+#define GENIEX_PTQ1_HVX_H
+
+#include <string.h>
+
+#include "ptq1_tile.h"
+
+#ifdef __hexagon__
+#include <hexagon_types.h>
+#include <hvx_hexagon_protos.h>
+
+static inline float geniex_ptq1_half_to_float(uint16_t bits) {
+    union {
+        uint16_t bits;
+        _Float16 value;
+    } half = {.bits = bits};
+    return (float)half.value;
+}
+
+typedef struct {
+    HVX_Vector lo;
+    HVX_Vector hi;
+} geniex_ptq1_act_pair;
+
+typedef struct {
+    geniex_ptq1_act_pair qs[3][5][2];
+    geniex_ptq1_act_pair qh[4];
+} geniex_ptq1_activation;
+
+static inline void geniex_ptq1_prepare_act_pair(
+    geniex_ptq1_act_pair *pair, const int8_t *activation, unsigned offset, unsigned count) {
+#ifdef PTQ1_SCALAR_PREP
+    int16_t lanes[128] __attribute__((aligned(128)));
+    for (unsigned m = 0; m < 4; ++m) {
+        const int16_t value = m < count ? activation[offset + m] : 0;
+        for (unsigned row = 0; row < GENIEX_PTQ1_TILE_ROWS; ++row) lanes[m * GENIEX_PTQ1_TILE_ROWS + row] = value;
+    }
+    pair->lo = *(const HVX_Vector *)&lanes[0];
+    pair->hi = *(const HVX_Vector *)&lanes[64];
+#else
+    const HVX_VectorPred first = Q6_Q_vsetq_R(64);
+    const HVX_Vector     a0    = Q6_Vh_vsplat_R(activation[offset]);
+    const HVX_Vector     a1    = Q6_Vh_vsplat_R(activation[offset + 1]);
+    const HVX_Vector     a2    = Q6_Vh_vsplat_R(count > 2 ? activation[offset + 2] : 0);
+    const HVX_Vector     a3    = Q6_Vh_vsplat_R(count > 2 ? activation[offset + 3] : 0);
+    pair->lo                   = Q6_V_vmux_QVV(first, a0, a1);
+    pair->hi                   = Q6_V_vmux_QVV(first, a2, a3);
+#endif
+}
+
+static inline void geniex_ptq1_prepare_activation(geniex_ptq1_activation *prepared, const int8_t *activation) {
+    for (unsigned group = 0; group < 3; ++group) {
+        for (unsigned n = 0; n < 5; ++n) {
+            for (unsigned chunk = 0; chunk < 2; ++chunk) {
+                geniex_ptq1_prepare_act_pair(
+                    &prepared->qs[group][n][chunk], activation, group * 40 + n * 8 + chunk * 4, 4);
+            }
+        }
+    }
+    for (unsigned n = 0; n < 4; ++n) geniex_ptq1_prepare_act_pair(&prepared->qh[n], activation, 120 + n * 2, 2);
+}
+
+static inline HVX_Vector geniex_ptq1_decode_trit(HVX_Vector bytes, unsigned power) {
+    const HVX_Vector mask = Q6_Vh_vsplat_R(255);
+    const HVX_Vector one  = Q6_Vh_vsplat_R(1);
+#ifdef PTQ1_SHIFT_DECODE
+    HVX_Vector x = bytes;
+    for (unsigned p = power; p > 1; p /= 3) {
+        x = Q6_Vh_vadd_VhVh(x, Q6_Vh_vasl_VhR(x, 1));
+    }
+#else
+    HVX_Vector x = Q6_Vh_vmpyi_VhVh(bytes, Q6_Vh_vsplat_R(power));
+#endif
+    x = Q6_V_vand_VV(x, mask);
+    x = Q6_Vh_vadd_VhVh(x, Q6_Vh_vasl_VhR(x, 1));
+    x = Q6_Vh_vasr_VhR(x, 8);
+    return Q6_Vh_vsub_VhVh(x, one);
+}
+
+static inline void geniex_ptq1_accumulate(
+    const uint8_t *codes, unsigned power, const geniex_ptq1_act_pair *activation, HVX_Vector sums[4]) {
+    const HVX_Vector     packed   = *(const HVX_UVector *)codes;
+    const HVX_VectorPair products = Q6_Wuh_vunpack_Vub(packed);
+    const HVX_Vector     lo       = geniex_ptq1_decode_trit(Q6_V_lo_W(products), power);
+    const HVX_Vector     hi       = geniex_ptq1_decode_trit(Q6_V_hi_W(products), power);
+    const HVX_VectorPair p0       = Q6_Ww_vmpy_VhVh(lo, activation->lo);
+    const HVX_VectorPair p1       = Q6_Ww_vmpy_VhVh(hi, activation->hi);
+    sums[0]                       = Q6_Vw_vadd_VwVw(sums[0], Q6_V_lo_W(p0));
+    sums[1]                       = Q6_Vw_vadd_VwVw(sums[1], Q6_V_hi_W(p0));
+    sums[2]                       = Q6_Vw_vadd_VwVw(sums[2], Q6_V_lo_W(p1));
+    sums[3]                       = Q6_Vw_vadd_VwVw(sums[3], Q6_V_hi_W(p1));
+}
+
+static inline void geniex_ptq1_dot_tile(
+    const geniex_ptq1_tile *tile, const geniex_ptq1_activation *activation, const float scales[4], float *outputs) {
+    static const unsigned powers[5] = {1, 3, 9, 27, 81};
+    HVX_Vector            acc[4][4];
+#ifdef PTQ1_SCALAR_REDUCE
+    int32_t lanes[4][4][GENIEX_PTQ1_TILE_ROWS] __attribute__((aligned(128)));
+#else
+    int32_t partial[4][2][GENIEX_PTQ1_TILE_ROWS] __attribute__((aligned(128)));
+#endif
+
+    for (unsigned b = 0; b < 4; ++b) {
+        for (unsigned m = 0; m < 4; ++m) acc[b][m] = Q6_V_vzero();
+    }
+
+    for (unsigned group = 0; group < 3; ++group) {
+#pragma clang loop unroll(full)
+        for (unsigned n = 0; n < 5; ++n) {
+            for (unsigned m = 0; m < 8; m += 4) {
+                const unsigned scale_index = (group * 40 + n * 8 + m) / 32;
+                geniex_ptq1_accumulate(
+                    tile->qs[group * 8 + m], powers[n], &activation->qs[group][n][m / 4], acc[scale_index]);
+            }
+        }
+    }
+#pragma clang loop unroll(full)
+    for (unsigned n = 0; n < 4; ++n) {
+        geniex_ptq1_accumulate(tile->qh[0], powers[n], &activation->qh[n], acc[3]);
+    }
+#ifdef PTQ1_SCALAR_REDUCE
+    for (unsigned b = 0; b < 4; ++b) {
+        for (unsigned m = 0; m < 4; ++m) *(HVX_Vector *)lanes[b][m] = acc[b][m];
+    }
+#else
+    for (unsigned b = 0; b < 4; ++b) {
+        const HVX_Vector even        = Q6_Vw_vadd_VwVw(acc[b][0], acc[b][2]);
+        const HVX_Vector odd         = Q6_Vw_vadd_VwVw(acc[b][1], acc[b][3]);
+        const HVX_Vector even_sum    = Q6_Vw_vadd_VwVw(even, Q6_V_vror_VR(even, 64));
+        const HVX_Vector odd_sum     = Q6_Vw_vadd_VwVw(odd, Q6_V_vror_VR(odd, 64));
+        *(HVX_Vector *)partial[b][0] = even_sum;
+        *(HVX_Vector *)partial[b][1] = odd_sum;
+    }
+#endif
+    for (unsigned row = 0; row < GENIEX_PTQ1_TILE_ROWS; ++row) {
+#ifdef PTQ1_SCALAR_REDUCE
+        const unsigned lane   = row / 2;
+        const unsigned parity = row % 2;
+#endif
+        float sum = 0.0f;
+        for (unsigned b = 0; b < 4; ++b) {
+#ifdef PTQ1_SCALAR_REDUCE
+            const int32_t partial = lanes[b][parity][lane] + lanes[b][parity][16 + lane] + lanes[b][2 + parity][lane] +
+                                    lanes[b][2 + parity][16 + lane];
+            sum += scales[b] * partial;
+#else
+            sum += scales[b] * partial[b][row % 2][row / 2];
+#endif
+        }
+        outputs[row] = geniex_ptq1_half_to_float(tile->d[row]) * sum;
+    }
+}
+
+// Weights contain one 32-row tile per 128-wide K block. The flat Q8 row
+// contains K int8 values, then four FP16 scales per K block.
+static inline void geniex_ptq1_flat_scales(float scales[4], const uint8_t *scale_bytes, uint32_t block) {
+    for (unsigned b = 0; b < 4; ++b) {
+        uint16_t bits;
+        memcpy(&bits, scale_bytes + 2 * (block * 4 + b), sizeof(bits));
+        scales[b] = geniex_ptq1_half_to_float(bits);
+    }
+}
+
+static inline void geniex_ptq1_dot_flat_q8(uint32_t k, float *outputs, const geniex_ptq1_tile *weights,
+    const void *flat_q8, unsigned valid_rows, geniex_ptq1_activation *scratch) {
+    const int8_t  *quants      = (const int8_t *)flat_q8;
+    const uint8_t *scale_bytes = (const uint8_t *)flat_q8 + k;
+    float          partial[GENIEX_PTQ1_TILE_ROWS];
+
+    assert(k % GENIEX_PTQ1_BLOCK_K == 0);
+    assert(valid_rows <= GENIEX_PTQ1_TILE_ROWS);
+    for (unsigned row = 0; row < valid_rows; ++row) outputs[row] = 0.0f;
+    for (uint32_t block = 0; block < k / GENIEX_PTQ1_BLOCK_K; ++block) {
+        float scales[4];
+        geniex_ptq1_flat_scales(scales, scale_bytes, block);
+        geniex_ptq1_prepare_activation(scratch, quants + block * GENIEX_PTQ1_BLOCK_K);
+        geniex_ptq1_dot_tile(&weights[block], scratch, scales, partial);
+        for (unsigned row = 0; row < valid_rows; ++row) outputs[row] += partial[row];
+    }
+}
+
+static inline void geniex_ptq1_dot_pair_flat_q8(uint32_t k, float *outputs0, float *outputs1,
+    const geniex_ptq1_tile *weights0, const geniex_ptq1_tile *weights1, const void *flat_q8, unsigned valid_rows0,
+    unsigned valid_rows1, geniex_ptq1_activation *scratch) {
+    const int8_t  *quants      = (const int8_t *)flat_q8;
+    const uint8_t *scale_bytes = (const uint8_t *)flat_q8 + k;
+    float          partial[GENIEX_PTQ1_TILE_ROWS];
+
+    assert(k % GENIEX_PTQ1_BLOCK_K == 0);
+    assert(valid_rows0 <= GENIEX_PTQ1_TILE_ROWS && valid_rows1 <= GENIEX_PTQ1_TILE_ROWS);
+    for (unsigned row = 0; row < valid_rows0; ++row) outputs0[row] = 0.0f;
+    for (unsigned row = 0; row < valid_rows1; ++row) outputs1[row] = 0.0f;
+    for (uint32_t block = 0; block < k / GENIEX_PTQ1_BLOCK_K; ++block) {
+        float scales[4];
+        geniex_ptq1_flat_scales(scales, scale_bytes, block);
+        geniex_ptq1_prepare_activation(scratch, quants + block * GENIEX_PTQ1_BLOCK_K);
+        geniex_ptq1_dot_tile(&weights0[block], scratch, scales, partial);
+        for (unsigned row = 0; row < valid_rows0; ++row) outputs0[row] += partial[row];
+        geniex_ptq1_dot_tile(&weights1[block], scratch, scales, partial);
+        for (unsigned row = 0; row < valid_rows1; ++row) outputs1[row] += partial[row];
+    }
+}
+#endif
+#endif

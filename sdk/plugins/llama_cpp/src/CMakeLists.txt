@@ -1,5 +1,9 @@
 file(GLOB_RECURSE LLAMA_CPP_SRCS *.cpp)
 add_library(geniex_llama_cpp SHARED ${LLAMA_CPP_SRCS})
+file(STRINGS "${_LLAMA_DIR}/tools/mtmd/mtmd-helper.h" _MTMD_BITMAP_OPT_API REGEX "mtmd_helper_init_opt_default")
+if(NOT _MTMD_BITMAP_OPT_API)
+    target_compile_definitions(geniex_llama_cpp PRIVATE GENIEX_MTMD_BITMAP_3_ARG)
+endif()
 
 target_compile_definitions(geniex_llama_cpp PUBLIC GENIEX_SHARED)
 
