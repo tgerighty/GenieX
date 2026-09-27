@@ -26,5 +26,6 @@ if ! output=$("$hex_tools/hexagon-sim" --march v75na_1 -r "$build_dir/worker.elf
     printf '%s\n' "$output" >&2
     exit 1
 fi
+grep -F 'GDN reference max output' <<< "$output"
 grep -F 'GDN worker S=' <<< "$output"
 grep -F 'Total: Insns=' <<< "$output"
