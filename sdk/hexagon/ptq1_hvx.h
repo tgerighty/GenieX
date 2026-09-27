@@ -115,7 +115,8 @@ static inline void geniex_ptq1_dot_tile(
     const HVX_VectorPair qh_products = Q6_Wuh_vunpack_Vub(*(const HVX_UVector *)tile->qh[0]);
 #pragma clang loop unroll(full)
     for (unsigned n = 0; n < 4; ++n) {
-        geniex_ptq1_accumulate(qh_products, powers[n], &activation->qh[n], acc[3]);
+        const HVX_Vector trit = geniex_ptq1_decode_trit(Q6_V_lo_W(qh_products), powers[n]);
+        acc[3][0] = Q6_Vh_vmpyiacc_VhVhVh(acc[3][0], trit, activation->qh[n].lo);
     }
 #ifdef PTQ1_SCALAR_REDUCE
     for (unsigned b = 0; b < 4; ++b) {
