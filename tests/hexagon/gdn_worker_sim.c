@@ -189,18 +189,39 @@ int main(void) {
             }
         }
     }
+    float max_output_magnitude = 0.0f;
+    float max_output_error = 0.0f;
+    float max_state_error = 0.0f;
+    float max_state_delta = 0.0f;
+    float no_delta_gate[MAX_H];
+    if (T == 1 && !GDN_VECTOR_GATE) {
+        for (unsigned h = 0; h < H; ++h) no_delta_gate[h] = expf(g_data[h]);
+    }
     for (unsigned i = 0; i < T * S * H; ++i) {
-        if (!(fabsf(dst_data[i] - ref_output[i]) <= 0.000001f)) {
+        const float magnitude = fabsf(ref_output[i]);
+        const float error = fabsf(dst_data[i] - ref_output[i]);
+        if (magnitude > max_output_magnitude) max_output_magnitude = magnitude;
+        if (error > max_output_error) max_output_error = error;
+        if (!(error <= 0.000001f)) {
             printf("output mismatch %u: %.8f != %.8f\n", i, dst_data[i], ref_output[i]);
             return 7;
         }
     }
     for (unsigned i = 0; i < S * S * H; ++i) {
-        if (!(fabsf(dst_data[T * S * H + i] - ref_state[i]) <= 0.000001f)) {
+        const float error = fabsf(dst_data[T * S * H + i] - ref_state[i]);
+        if (error > max_state_error) max_state_error = error;
+        if (T == 1 && !GDN_VECTOR_GATE) {
+            const float no_delta = state_in[i] * no_delta_gate[i / (S * S)];
+            const float delta = fabsf(ref_state[i] - no_delta);
+            if (delta > max_state_delta) max_state_delta = delta;
+        }
+        if (!(error <= 0.000001f)) {
             printf("state mismatch %u: %.8f != %.8f\n", i, dst_data[T * S * H + i], ref_state[i]);
             return 8;
         }
     }
+    printf("GDN reference max output %.9g, output error %.9g, state error %.9g, state delta %.9g\n",
+        max_output_magnitude, max_output_error, max_state_error, max_state_delta);
     uint64_t hash = hash_floats(dst_data, T * S * H + S * S * H, UINT64_C(1469598103934665603));
     if (expected_hash() != 0 && hash != expected_hash()) {
         printf("GDN raw output/state hash mismatch: %016llx != %016llx\n",
