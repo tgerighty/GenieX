@@ -70,7 +70,7 @@ static inline HVX_Vector geniex_ptq1_decode_trit(HVX_Vector bytes, unsigned powe
         x = Q6_Vh_vadd_VhVh(x, Q6_Vh_vasl_VhR(x, 1));
     }
 #else
-    HVX_Vector x = Q6_Vh_vmpyi_VhVh(bytes, Q6_Vh_vsplat_R(power));
+    HVX_Vector x = power == 1 ? bytes : Q6_Vh_vmpyi_VhVh(bytes, Q6_Vh_vsplat_R(power));
 #endif
     x = Q6_V_vand_VV(x, mask);
     x = Q6_Vh_vadd_VhVh(x, Q6_Vh_vasl_VhR(x, 1));
