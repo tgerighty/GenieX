@@ -64,7 +64,13 @@ static void check_prefill_scratch(void) {
     htp_mm_hvx_vtcm_layout_build(&layout, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT,
         HTP_TYPE_PTQ1_0, k, 3, threads, 81 * sizeof(float), 1120, k * sizeof(float), 0, 2,
         false, false, false);
-    assert(layout.dst_bytes / threads == k * sizeof(float) + 2 * HTP_MM_PTQ1_ACT_SCRATCH_SIZE);
+    assert(layout.dst_bytes / threads == k * sizeof(float) + HTP_MM_PTQ1_ACT_SCRATCH_SIZE);
+    assert(layout.total_bytes <= 8 * 1024 * 1024);
+
+    htp_mm_hvx_vtcm_layout_build(&layout, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT,
+        HTP_TYPE_PTQ1_0, 17408, 310, threads, 5120 * sizeof(float), 17408 / 128 * 28,
+        17408 * sizeof(float), 0, 2, false, false, false);
+    assert(layout.dst_bytes / threads == 17408 * sizeof(float) + HTP_MM_PTQ1_ACT_SCRATCH_SIZE);
     assert(layout.total_bytes <= 8 * 1024 * 1024);
 }
 
