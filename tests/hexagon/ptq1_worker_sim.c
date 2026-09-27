@@ -21,7 +21,7 @@ static geniex_ptq1_block blocks[GENIEX_PTQ1_TILE_ROWS * KB];
 static float activations[M][K] __attribute__((aligned(128)));
 static float biases[M][ROW_STRIDE] __attribute__((aligned(128)));
 static float outputs[M][ROW_STRIDE] __attribute__((aligned(128)));
-static uint8_t vtcm[131072] __attribute__((aligned(128)));
+static uint8_t vtcm[524288] __attribute__((aligned(128)));
 static uint8_t queue_storage[4096] __attribute__((aligned(128)));
 
 static int scalar_trit(uint8_t packed, unsigned power) {
@@ -99,13 +99,11 @@ int main(void) {
         y.nb[1], w.nb[1], htp_mm_q8_0_flat_row_size(K), b.nb[1], 2, false, false, false);
     if (layout.total_bytes + 128 > sizeof(vtcm)) return 1;
     kparams->vtcm_size = layout.total_bytes;
-    memset(vtcm, 0xa5, sizeof(vtcm));
+    memset(vtcm, 0xa5, layout.total_bytes + 128);
     ctx.vtcm_base = vtcm;
     ctx.vtcm_size = layout.total_bytes;
     ctx.dma[0] = dma_queue_init(queue_storage, 8, (uintptr_t)(vtcm + layout.off_src0), layout.src0_bytes, &ctx.trace[0]);
-    const uint64_t start_cycles = hex_get_cycles();
     if (hvx_mm_matmul(&octx) != HTP_STATUS_OK) return 2;
-    const uint64_t op_cycles = hex_get_cycles() - start_cycles;
     for (unsigned i = 0; i < 128; ++i) if (vtcm[layout.total_bytes + i] != 0xa5) return 3;
     float checksum = 0.0f;
     for (unsigned ir = 0; ir < M; ++ir) {
@@ -126,6 +124,6 @@ int main(void) {
             checksum += outputs[ir][n];
         }
     }
-    printf("PTQ1 worker K=%d M=%d checksum %.1f; op cycles %llu\n", K, M, checksum, (unsigned long long)op_cycles);
+    printf("PTQ1 worker K=%d M=%d checksum %.1f\n", K, M, checksum);
     return 0;
 }
