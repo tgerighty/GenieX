@@ -66,6 +66,8 @@ The SDK patch adds PTQ1_0 weight repacking and a 128-wide HTP decode matvec path
 
 From the toolchain container above, run `/workspace/tests/hexagon/run-ptq1-dma-bench.sh /prism` to repeat the `-fpic` comparison and compare DMA outputs with the direct kernel for 32, 1, and 3 tiles. The simulator may need a compatible `libncurses.so.5` path.
 
+Reusing each packed-weight load and unpack across its trit powers reduced the paired 32-tile run from 6,573,783 to 5,383,383 v75 simulator Pcycles (18.1%) at `-O2 -fpic`. Both builds returned checksum `-4122.0`; the optimized path passed the 32-, 1-, and 3-tile DMA checks and the scalar-reference kernel test. The dot function's measured stack frame stayed at 3,328 bytes. These are simulator results, not device latency or model throughput.
+
 The faster full-K reuse experiment above is not integrated because it needs much more per-worker scratch. These checks do not run full model inference on the Hexagon. A VENTUNO Q run is required before NPU support, model accuracy, latency, or tokens per second can be claimed.
 
 The real GGUF has an `output.weight` PTQ1_0 matrix of shape `[5120, 248320]`. The HTP eligibility check currently caps PTQ1_0 at 32,768 output rows, so the output head remains on CPU. This cap is also a VTCM safeguard: the current flat matvec layout reserves a full output row per HTP worker. At eight workers, that output buffer alone would use 7,946,240 bytes, before weight tiles, activation scratch, and other buffers, exceeding the default 8 MiB budget in total. A per-worker output slice could remove that memory limit, but moving this large matrix to HTP may still be slower. Keep the cap until a device can compare complete decode latency with and without output-head offload.
