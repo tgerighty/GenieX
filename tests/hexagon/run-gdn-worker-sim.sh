@@ -17,6 +17,8 @@ flags=(-mcpu=v75 -mv75 -mhvx=v75 -mhmx -O2)
 "$hex_tools/hexagon-clang" "${includes[@]}" "${flags[@]}" -fpic -ffunction-sections -fdata-sections \
     -DGDN_S="${GDN_S:-128}" -DGDN_H="${GDN_H:-32}" -DGDN_T="${GDN_T:-1}" \
     -DGDN_VECTOR_GATE="${GDN_VECTOR_GATE:-0}" -DGDN_REPEATS="${GDN_REPEATS:-1}" \
+    -DGDN_FAULT_OUTPUT_ZERO="${GDN_FAULT_OUTPUT_ZERO:-0}" \
+    -DGDN_FAULT_STATE_NO_DELTA="${GDN_FAULT_STATE_NO_DELTA:-0}" \
     -c "$here/gdn_worker_sim.c" -o "$build_dir/worker.o"
 "$hex_tools/hexagon-clang" "${flags[@]}" -Wl,--gc-sections \
     "$build_dir/worker.o" "$build_dir/queue.o" -lm -o "$build_dir/worker.elf"

@@ -25,6 +25,12 @@ bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void * data, u
 #ifndef GDN_REPEATS
 #define GDN_REPEATS 1
 #endif
+#ifndef GDN_FAULT_OUTPUT_ZERO
+#define GDN_FAULT_OUTPUT_ZERO 0
+#endif
+#ifndef GDN_FAULT_STATE_NO_DELTA
+#define GDN_FAULT_STATE_NO_DELTA 0
+#endif
 
 enum { S = GDN_S, H = GDN_H, T = GDN_T, MAX_S = 128, MAX_H = 32, MAX_T = 2 };
 _Static_assert(S > 0 && S <= MAX_S && H > 0 && H <= MAX_H && T > 0 && T <= MAX_T, "test shape");
@@ -104,6 +110,14 @@ static uint64_t hash_floats(const float * data, unsigned n, uint64_t hash) {
     return hash;
 }
 
+static uint64_t expected_hash(void) {
+    if (S == 128 && H == 32 && T == 1 && !GDN_VECTOR_GATE) return UINT64_C(0x84a4bde95f58714b);
+    if (S == 10 && H == 3 && T == 1 && !GDN_VECTOR_GATE) return UINT64_C(0x875fe36b686b76e2);
+    if (S == 128 && H == 2 && T == 1 && GDN_VECTOR_GATE) return UINT64_C(0x77fbaf4836454c14);
+    if (S == 128 && H == 2 && T == 2 && !GDN_VECTOR_GATE) return UINT64_C(0xb75652c50bf1f9e8);
+    return 0;
+}
+
 int main(void) {
     init_case();
     if (dma_queue_sizeof(8) > sizeof(queue_storage)) {
@@ -162,19 +176,37 @@ int main(void) {
         }
     }
     scalar_reference();
+    if (GDN_FAULT_OUTPUT_ZERO) {
+        memset(dst_data, 0, T * S * H * sizeof(float));
+    }
+    if (GDN_FAULT_STATE_NO_DELTA) {
+        if (T != 1 || GDN_VECTOR_GATE) return 9;
+        for (unsigned h = 0; h < H; ++h) {
+            const float gate = expf(g_data[h]);
+            for (unsigned i = 0; i < S * S; ++i) {
+                const unsigned off = h * S * S + i;
+                dst_data[T * S * H + off] = state_in[off] * gate;
+            }
+        }
+    }
     for (unsigned i = 0; i < T * S * H; ++i) {
-        if (!(fabsf(dst_data[i] - ref_output[i]) <= 0.0005f)) {
+        if (!(fabsf(dst_data[i] - ref_output[i]) <= 0.000001f)) {
             printf("output mismatch %u: %.8f != %.8f\n", i, dst_data[i], ref_output[i]);
             return 7;
         }
     }
     for (unsigned i = 0; i < S * S * H; ++i) {
-        if (!(fabsf(dst_data[T * S * H + i] - ref_state[i]) <= 0.0005f)) {
+        if (!(fabsf(dst_data[T * S * H + i] - ref_state[i]) <= 0.000001f)) {
             printf("state mismatch %u: %.8f != %.8f\n", i, dst_data[T * S * H + i], ref_state[i]);
             return 8;
         }
     }
     uint64_t hash = hash_floats(dst_data, T * S * H + S * S * H, UINT64_C(1469598103934665603));
+    if (expected_hash() != 0 && hash != expected_hash()) {
+        printf("GDN raw output/state hash mismatch: %016llx != %016llx\n",
+            (unsigned long long) hash, (unsigned long long) expected_hash());
+        return 10;
+    }
     printf("GDN worker S=%d H=%d T=%d vector=%d repeats=%d hash=%016llx\n",
         S, H, T, GDN_VECTOR_GATE, GDN_REPEATS, (unsigned long long) hash);
     return 0;
