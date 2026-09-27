@@ -15,7 +15,7 @@ includes=(-I"$here/../../sdk/hexagon" -I"$prism_htp" -I"$sdk/incs" -I"$sdk/incs/
     -I"$sdk/rtos/qurt/computev75/include/qurt")
 flags=(-mcpu=v75 -mv75 -mhvx=v75 -mhmx -O2)
 "$tools/hexagon-clang" "${includes[@]}" "${flags[@]}" "$here/ptq1_output_layout.c" -o "$build_dir/layout.elf"
-"$tools/hexagon-sim" --march v75na_1 -r "$build_dir/layout.elf" | sed -n '/PTQ1 output layout passed/p'
+"$tools/hexagon-sim" --march v75na_1 -r "$build_dir/layout.elf" | grep -Fx 'PTQ1 output layout passed'
 "$tools/hexagon-clang" "${includes[@]}" "${flags[@]}" -fpic -c "$prism_htp/dma-queue.c" -o "$build_dir/queue.o"
 
 for variant in single pair; do
