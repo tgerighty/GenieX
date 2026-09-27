@@ -12,9 +12,9 @@ trap 'rm -rf "$build_dir"' EXIT
 
 includes=(-I"$prism_htp" -I"$prism_htp/.." -I"$prism_htp/../.."
     -I"$sdk/incs" -I"$sdk/incs/stddef" -I"$sdk/rtos/qurt/computev75/include/qurt")
-flags=(-mcpu=v75 -mv75 -mhvx=v75 -mhmx -O2 -fpic)
-"$hex_tools/hexagon-clang" "${includes[@]}" "${flags[@]}" -c "$prism_htp/dma-queue.c" -o "$build_dir/queue.o"
-"$hex_tools/hexagon-clang" "${includes[@]}" "${flags[@]}" -ffunction-sections -fdata-sections \
+flags=(-mcpu=v75 -mv75 -mhvx=v75 -mhmx -O2)
+"$hex_tools/hexagon-clang" "${includes[@]}" "${flags[@]}" -fpic -c "$prism_htp/dma-queue.c" -o "$build_dir/queue.o"
+"$hex_tools/hexagon-clang" "${includes[@]}" "${flags[@]}" -fpic -ffunction-sections -fdata-sections \
     -DGDN_S="${GDN_S:-128}" -DGDN_H="${GDN_H:-32}" -DGDN_T="${GDN_T:-1}" \
     -DGDN_VECTOR_GATE="${GDN_VECTOR_GATE:-0}" -DGDN_REPEATS="${GDN_REPEATS:-1}" \
     -c "$here/gdn_worker_sim.c" -o "$build_dir/worker.o"
