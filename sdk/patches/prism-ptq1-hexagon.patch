@@ -209,7 +209,7 @@ index a138f06..f444115 100644
      // types used internally for repack, dyn.quant, etc
      HTP_TYPE_Q4_0_TILED = 200,
 diff --git a/ggml/src/ggml-hexagon/htp/matmul-ops.c b/ggml/src/ggml-hexagon/htp/matmul-ops.c
-index 9d38546..536e157 100644
+index 9d38546..c9775b6 100644
 --- a/ggml/src/ggml-hexagon/htp/matmul-ops.c
 +++ b/ggml/src/ggml-hexagon/htp/matmul-ops.c
 @@ -23,6 +23,10 @@
@@ -275,7 +275,7 @@ index 9d38546..536e157 100644
              }                                                                                                                     \
 -            DOT_2X1(ne10, dst_ptr, w_tile, src1_col, valid_rows, src2_ptr);                                                       \
 +            if (w_tile_next) {                                                                                                    \
-+                PAIR_2X1(ne10, dst_ptr, w_tile, w_tile_next, src1_col, valid_rows, valid_rows_next, src2_ptr);                    \
++                PAIR_2X1(ne10, dst_ptr, dst_ptr + 32, w_tile, w_tile_next, src1_col, valid_rows, valid_rows_next, src2_ptr);      \
 +            } else {                                                                                                              \
 +                DOT_2X1(ne10, dst_ptr, w_tile, src1_col, valid_rows, src2_ptr);                                                   \
 +            }                                                                                                                     \
