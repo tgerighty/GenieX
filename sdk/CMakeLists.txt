@@ -184,6 +184,7 @@ if(GENIEX_PLUGIN_LLAMA_CPP)
             message(FATAL_ERROR "Missing Prism PTQ1_0 patch: ${_PTQ1_PATCH}")
         endif()
         list(APPEND _LLAMA_PATCHES "${_PTQ1_PATCH}")
+        list(APPEND _LLAMA_PATCHES "${CMAKE_CURRENT_SOURCE_DIR}/patches/prism-gdn-scalar4-hexagon.patch")
     endif()
     if(GGML_HEXAGON AND _LLAMA_DIR STREQUAL _LLAMA_VENDORED_DIR)
         list(APPEND _LLAMA_PATCHES

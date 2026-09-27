@@ -1,0 +1,35 @@
+diff --git a/ggml/src/ggml-hexagon/htp/gated-delta-net-ops.c b/ggml/src/ggml-hexagon/htp/gated-delta-net-ops.c
+index 35518e6..d943236 100644
+--- a/ggml/src/ggml-hexagon/htp/gated-delta-net-ops.c
++++ b/ggml/src/ggml-hexagon/htp/gated-delta-net-ops.c
+@@ -998,30 +998,6 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
+         } else {
+             const float gate = expf(g_t[0]);
+             uint32_t j = 0;
+-            for (; j + 8 <= S_v; j += 8) {
+-                float * row0 = s_work_curr + (uint64_t) (j + 0) * S_v;
+-                float * row1 = s_work_curr + (uint64_t) (j + 1) * S_v;
+-                float * row2 = s_work_curr + (uint64_t) (j + 2) * S_v;
+-                float * row3 = s_work_curr + (uint64_t) (j + 3) * S_v;
+-                float * row4 = s_work_curr + (uint64_t) (j + 4) * S_v;
+-                float * row5 = s_work_curr + (uint64_t) (j + 5) * S_v;
+-                float * row6 = s_work_curr + (uint64_t) (j + 6) * S_v;
+-                float * row7 = s_work_curr + (uint64_t) (j + 7) * S_v;
+-                gdn_mul_scalar_dot8_f32(row0, row1, row2, row3, row4, row5, row6, row7,
+-                                        gate, local_k, S_v, local_sums);
+-
+-                float local_delta_b[32] __attribute__((aligned(128)));
+-                HVX_Vector vv_t = hvx_vmemu(v_t + j);
+-                HVX_Vector v_local_sums = hvx_vmem(local_sums);
+-                HVX_Vector diff = hvx_vec_sub_f32_f32(vv_t, v_local_sums);
+-                hvx_vmem(local_delta_b) = hvx_vec_mul_f32_f32(diff, hvx_vec_splat_f32(beta_val));
+-
+-                gdn_add_scaled_dot8_f32(row0, row1, row2, row3, row4, row5, row6, row7,
+-                                        local_k, local_delta_b, local_q, S_v, local_sums);
+-
+-                HVX_Vector res_attn = hvx_vec_mul_f32_f32(hvx_vmem(local_sums), hvx_vec_splat_f32(scale));
+-                hvx_vec_store_u(attn_data + j, 8 * sizeof(float), res_attn);
+-            }
+             for (; j + 4 <= S_v; j += 4) {
+                 float * row0 = s_work_curr + (uint64_t) (j + 0) * S_v;
+                 float * row1 = s_work_curr + (uint64_t) (j + 1) * S_v;
