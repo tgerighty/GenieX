@@ -141,6 +141,7 @@ int main(void) {
     if (rc) return rc;
     printf("SET_ROWS bench width=%u rows=%u repeats=%u aligned output and guards passed\n",
            (unsigned)P13_BENCH_WIDTH, (unsigned)P13_ROWS, (unsigned)P13_BENCH_REPEATS);
+    printf("SET_ROWS output FNV64=0x%016llx\n", (unsigned long long)output_hash);
 #else
     const uint32_t widths[] = { 1024, 1279, 1280, 5120, 11008 };
     const uint32_t offsets[][2] = { {0, 0}, {4, 0}, {0, 2}, {4, 2} };
