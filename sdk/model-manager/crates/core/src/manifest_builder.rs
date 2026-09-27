@@ -149,7 +149,7 @@ pub fn infer_manifest_from_names(
     };
 
     let model_type = infer_model_type(&hint, file_names);
-    if model_type == ModelType::Llm && !mmprojs.is_empty() {
+    if model_type == ModelType::Llm && (!mmprojs.is_empty() || !model_file.is_empty()) {
         mmproj_file = ModelFileInfo::default();
     }
 
@@ -166,16 +166,18 @@ pub fn infer_manifest_from_names(
     };
 
     // ExtraFiles: trailing GGUF shards (the entrypoint shard lives in
-    // model_file) + all .npy + .geniex not used as mmproj.
+    // model_file) + all .npy + relevant .geniex not used as mmproj.
     let mut extra_files: Vec<ModelFileInfo> = Vec::new();
     extra_files.extend(shard_extras.iter().map(|n| file_info(n, sizes)));
     extra_files.extend(npy_files.iter().map(|n| file_info(n, sizes)));
-    extra_files.extend(
-        geniex_files
-            .iter()
-            .filter(|n| mmproj_file.name != ***n)
-            .map(|n| file_info(n, sizes)),
-    );
+    if model_type != ModelType::Llm || model_file.is_empty() {
+        extra_files.extend(
+            geniex_files
+                .iter()
+                .filter(|n| mmproj_file.name != ***n)
+                .map(|n| file_info(n, sizes)),
+        );
+    }
 
     // Derive model_name: last path component of `name`, with -GGUF suffix
     // stripped. e.g. "Qwen/Qwen3-4B-GGUF" -> "Qwen3-4B".
@@ -591,6 +593,20 @@ mod tests {
             let manifest =
                 infer_manifest_from_names("model", &names, &sizes, Default::default()).unwrap();
             assert_eq!(manifest.mmproj_file.name, filename);
+        }
+    }
+
+    #[test]
+    fn gguf_llm_does_not_select_qairt_file_as_projector() {
+        for filename in ["model.onnx", "model.geniex"] {
+            let (names, sizes) = sizes_of(&[("model-Q4_0.gguf", 2048), (filename, 1024)]);
+            let manifest =
+                infer_manifest_from_names("model", &names, &sizes, Default::default()).unwrap();
+            assert_eq!(manifest.model_type, ModelType::Llm);
+            assert!(manifest.model_file.contains_key("Q4_0"));
+            assert!(manifest.mmproj_file.name.is_empty());
+            assert!(manifest.extra_files.is_empty());
+            assert_eq!(manifest.total_size(), 2048);
         }
     }
 
