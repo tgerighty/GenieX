@@ -29,6 +29,7 @@ static void check_rows(uint32_t rows, uint32_t threads) {
     }
     if (rows <= 248321) assert(layout.total_bytes <= 8 * 1024 * 1024);
     else assert(layout.total_bytes > 8 * 1024 * 1024);
+    if (rows == 248320) printf("PTQ1 output head VTCM %zu bytes\n", layout.total_bytes);
 }
 
 static void check_partial_output(uint32_t rows) {
