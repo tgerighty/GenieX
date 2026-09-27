@@ -157,7 +157,7 @@ index 2cd015b..20788d7 100644
      switch (src0->type) {
 +        case GGML_TYPE_PTQ1_0:
 +            if (src0->ne[0] % GENIEX_PTQ1_BLOCK_K || src0->ne[2] != 1 || src0->ne[3] != 1 ||
-+                src1->type != GGML_TYPE_F32 ||
++                src0->ne[1] > sess->vtcm_size / sizeof(float) || src1->type != GGML_TYPE_F32 ||
 +                src1->ne[1] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1 ||
 +                (src0->buffer && !ggml_backend_buffer_is_hexagon_repack(src0->buffer))) {
 +                return false;

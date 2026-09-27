@@ -57,10 +57,15 @@ static void check_partial_output(uint32_t rows) {
 }
 
 int main(void) {
+    const uint32_t coarse_limit = (8 * 1024 * 1024) / sizeof(float);
+    assert(coarse_limit == 2097152);
+    assert(248320 <= coarse_limit);
     check_rows(1, 8);
     check_rows(33, 8);
     check_rows(248320, 8);
     check_rows(248321, 8);
+    check_rows(coarse_limit, 8);
+    check_rows(coarse_limit + 1, 8);
     check_rows(20000000, 8);
     check_partial_output(33);
     check_partial_output(81);
