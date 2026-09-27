@@ -23,6 +23,18 @@ uint64 HAP_perf_qtimer_count_to_us(uint64 count) {
     return count;
 }
 
+static float input_value(uint32_t row, uint32_t element) {
+    switch (element % 8) {
+        case 0: return 0.0f;
+        case 1: return -0.0f;
+        case 2: return 1.00048828125f;
+        case 3: return 1.0004884f;
+        case 4: return -1.00048828125f;
+        case 5: return -1.0004884f;
+        default: return (float)((int)((row * 37 + element * 13) % 2047) - 1023) / 37.0f;
+    }
+}
+
 static int run_case(uint32_t width, uint32_t src_offset, uint32_t dst_offset, bool use_i64,
                     uint32_t repeats, uint32_t src_pad, uint32_t dst_pad) {
     const uint32_t src_row = width * sizeof(float) + src_pad;
@@ -38,12 +50,8 @@ static int run_case(uint32_t width, uint32_t src_offset, uint32_t dst_offset, bo
         idx64[r] = (int64_t)dest_row;
         float * row = (float *)(src + r * src_row);
         for (uint32_t j = 0; j < width; ++j) {
-            row[j] = (float)((int)((r * 37 + j * 13) % 2047) - 1023) / 37.0f;
+            row[j] = input_value(r, j);
         }
-    }
-
-    for (uint32_t j = 0; j < width * sizeof(_Float16); ++j) {
-        if (dst[dst_row + j] != 0x5A) return 5;
     }
 
     struct htp_tensor src_tensor = {0}, index_tensor = {0}, dst_tensor = {0};
@@ -73,16 +81,45 @@ static int run_case(uint32_t width, uint32_t src_offset, uint32_t dst_offset, bo
 
     for (uint32_t r = 0; r < ROWS; ++r) {
         const uint32_t out_row = use_i64 ? (uint32_t)idx64[r] : (uint32_t)idx32[r];
-        const float * in = (const float *)(src + r * src_row);
-        const _Float16 * out = (const _Float16 *)(dst + out_row * dst_row);
+        const uint16_t * out = (const uint16_t *)(dst + out_row * dst_row);
         for (uint32_t j = 0; j < width; ++j) {
-            if (out[j] != (_Float16)in[j]) return 2;
+            const _Float16 expected = (_Float16)input_value(r, j);
+            uint16_t expected_bits;
+            memcpy(&expected_bits, &expected, sizeof(expected_bits));
+            if (out[j] != expected_bits) return 2;
+            uint32_t expected_input_bits, actual_input_bits;
+            const float expected_input = input_value(r, j);
+            memcpy(&expected_input_bits, &expected_input, sizeof(expected_input_bits));
+            memcpy(&actual_input_bits, src + r * src_row + j * sizeof(float), sizeof(actual_input_bits));
+            if (actual_input_bits != expected_input_bits) return 6;
         }
     }
 
-    for (uint32_t j = 0; j < GUARD; ++j) {
-        if (src_storage[j] != 0xA5 || src_storage[sizeof(src_storage) - 1 - j] != 0xA5) return 3;
-        if (dst_storage[j] != 0x5A || dst_storage[sizeof(dst_storage) - 1 - j] != 0x5A) return 4;
+    const uintptr_t dst_base = (uintptr_t)dst_storage;
+    for (uintptr_t pos = 0; pos < sizeof(dst_storage); ++pos) {
+        const uintptr_t addr = dst_base + pos;
+        bool is_output = false;
+        for (uint32_t r = 0; r < ROWS; ++r) {
+            const uint32_t out_row = use_i64 ? (uint32_t)idx64[r] : (uint32_t)idx32[r];
+            const uintptr_t begin = (uintptr_t)(dst + out_row * dst_row);
+            if (addr >= begin && addr < begin + width * sizeof(_Float16)) {
+                is_output = true;
+                break;
+            }
+        }
+        if (!is_output && dst_storage[pos] != 0x5A) return 4;
+    }
+    for (uint32_t j = 0; j < sizeof(src_storage); ++j) {
+        bool is_input = false;
+        for (uint32_t r = 0; r < ROWS; ++r) {
+            const uintptr_t begin = (uintptr_t)(src + r * src_row);
+            const uintptr_t addr = (uintptr_t)(src_storage + j);
+            if (addr >= begin && addr < begin + width * sizeof(float)) {
+                is_input = true;
+                break;
+            }
+        }
+        if (!is_input && src_storage[j] != 0xA5) return 3;
     }
     return 0;
 }
