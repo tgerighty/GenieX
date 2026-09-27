@@ -57,6 +57,17 @@ static void check_partial_output(uint32_t rows) {
     for (uint32_t row = 0; row < rows; ++row) assert(output[row + 1] == (float)(row + 1));
 }
 
+static void check_prefill_scratch(void) {
+    const uint32_t k = 5120;
+    const uint32_t threads = 8;
+    struct htp_mm_hvx_vtcm_layout layout;
+    htp_mm_hvx_vtcm_layout_build(&layout, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT,
+        HTP_TYPE_PTQ1_0, k, 3, threads, 81 * sizeof(float), 1120, k * sizeof(float), 0, 2,
+        false, false, false);
+    assert(layout.dst_bytes / threads == k * sizeof(float) + 2 * HTP_MM_PTQ1_ACT_SCRATCH_SIZE);
+    assert(layout.total_bytes <= 8 * 1024 * 1024);
+}
+
 int main(void) {
     const uint32_t coarse_limit = (8 * 1024 * 1024) / sizeof(float);
     assert(coarse_limit == 2097152);
@@ -70,6 +81,7 @@ int main(void) {
     check_rows(20000000, 8);
     check_partial_output(33);
     check_partial_output(81);
+    check_prefill_scratch();
     puts("PTQ1 output layout passed");
     return 0;
 }

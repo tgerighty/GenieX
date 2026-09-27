@@ -92,6 +92,23 @@ static inline void geniex_ptq1_accumulate(
     *scaled_hi                 = Q6_V_vand_VV(triple_hi, mask);
 }
 
+static inline void geniex_ptq1_accumulate_two(
+    HVX_Vector *scaled_lo, HVX_Vector *scaled_hi, const geniex_ptq1_act_pair *act0,
+    const geniex_ptq1_act_pair *act1, HVX_Vector sums0[2], HVX_Vector sums1[2]) {
+    const HVX_Vector one       = Q6_Vh_vsplat_R(1);
+    const HVX_Vector mask      = Q6_Vh_vsplat_R(255);
+    const HVX_Vector triple_lo = Q6_Vh_vadd_VhVh(*scaled_lo, Q6_Vh_vasl_VhR(*scaled_lo, 1));
+    const HVX_Vector triple_hi = Q6_Vh_vadd_VhVh(*scaled_hi, Q6_Vh_vasl_VhR(*scaled_hi, 1));
+    const HVX_Vector trit_lo   = Q6_Vh_vsub_VhVh(Q6_Vh_vasr_VhR(triple_lo, 8), one);
+    const HVX_Vector trit_hi   = Q6_Vh_vsub_VhVh(Q6_Vh_vasr_VhR(triple_hi, 8), one);
+    sums0[0] = Q6_Vh_vmpyiacc_VhVhVh(sums0[0], trit_lo, act0->lo);
+    sums0[1] = Q6_Vh_vmpyiacc_VhVhVh(sums0[1], trit_hi, act0->hi);
+    sums1[0] = Q6_Vh_vmpyiacc_VhVhVh(sums1[0], trit_lo, act1->lo);
+    sums1[1] = Q6_Vh_vmpyiacc_VhVhVh(sums1[1], trit_hi, act1->hi);
+    *scaled_lo = Q6_V_vand_VV(triple_lo, mask);
+    *scaled_hi = Q6_V_vand_VV(triple_hi, mask);
+}
+
 static inline void geniex_ptq1_dot_tile(
     const geniex_ptq1_tile *tile, const geniex_ptq1_activation *activation, const float scales[4], float *outputs) {
     static const unsigned powers[5] = {1, 3, 9, 27, 81};
@@ -156,6 +173,60 @@ static inline void geniex_ptq1_dot_tile(
     }
 }
 
+static inline void geniex_ptq1_dot_tile_two(
+    const geniex_ptq1_tile *tile, const geniex_ptq1_activation *act0,
+    const geniex_ptq1_activation *act1, const float scales0[4], const float scales1[4],
+    float *outputs0, float *outputs1) {
+    static const unsigned powers[4] = {1, 3, 9, 27};
+    HVX_Vector acc0[4][2], acc1[4][2];
+    int16_t partial0[4][2 * GENIEX_PTQ1_TILE_ROWS] __attribute__((aligned(128)));
+    int16_t partial1[4][2 * GENIEX_PTQ1_TILE_ROWS] __attribute__((aligned(128)));
+
+    for (unsigned b = 0; b < 4; ++b) {
+        for (unsigned m = 0; m < 2; ++m) acc0[b][m] = acc1[b][m] = Q6_V_vzero();
+    }
+#pragma clang loop unroll(full)
+    for (unsigned group = 0; group < 3; ++group) {
+#pragma clang loop unroll(full)
+        for (unsigned m = 0; m < 8; m += 4) {
+            const HVX_VectorPair products = Q6_Wuh_vunpack_Vub(*(const HVX_UVector *)tile->qs[group * 8 + m]);
+            HVX_Vector scaled_lo = Q6_V_lo_W(products);
+            HVX_Vector scaled_hi = Q6_V_hi_W(products);
+#pragma clang loop unroll(full)
+            for (unsigned n = 0; n < 5; ++n) {
+                const unsigned scale_index = (group * 40 + n * 8 + m) / 32;
+                geniex_ptq1_accumulate_two(&scaled_lo, &scaled_hi, &act0->qs[group][n][m / 4],
+                    &act1->qs[group][n][m / 4], acc0[scale_index], acc1[scale_index]);
+            }
+        }
+    }
+    const HVX_VectorPair qh_products = Q6_Wuh_vunpack_Vub(*(const HVX_UVector *)tile->qh[0]);
+#pragma clang loop unroll(full)
+    for (unsigned n = 0; n < 4; ++n) {
+        const HVX_Vector trit = geniex_ptq1_decode_trit(Q6_V_lo_W(qh_products), powers[n]);
+        acc0[3][0] = Q6_Vh_vmpyiacc_VhVhVh(acc0[3][0], trit, act0->qh[n].lo);
+        acc1[3][0] = Q6_Vh_vmpyiacc_VhVhVh(acc1[3][0], trit, act1->qh[n].lo);
+    }
+    for (unsigned b = 0; b < 4; ++b) {
+        const HVX_Vector lo0 = Q6_Vh_vadd_VhVh(acc0[b][0], Q6_V_vror_VR(acc0[b][0], 64));
+        const HVX_Vector hi0 = Q6_Vh_vadd_VhVh(acc0[b][1], Q6_V_vror_VR(acc0[b][1], 64));
+        const HVX_Vector lo1 = Q6_Vh_vadd_VhVh(acc1[b][0], Q6_V_vror_VR(acc1[b][0], 64));
+        const HVX_Vector hi1 = Q6_Vh_vadd_VhVh(acc1[b][1], Q6_V_vror_VR(acc1[b][1], 64));
+        *(HVX_Vector *)partial0[b] = Q6_Vh_vadd_VhVh(lo0, hi0);
+        *(HVX_Vector *)partial1[b] = Q6_Vh_vadd_VhVh(lo1, hi1);
+    }
+    for (unsigned row = 0; row < GENIEX_PTQ1_TILE_ROWS; ++row) {
+        float sum0 = 0.0f, sum1 = 0.0f;
+        for (unsigned b = 0; b < 4; ++b) {
+            sum0 += scales0[b] * partial0[b][row];
+            sum1 += scales1[b] * partial1[b][row];
+        }
+        const float weight_scale = geniex_ptq1_half_to_float(tile->d[row]);
+        outputs0[row] = weight_scale * sum0;
+        outputs1[row] = weight_scale * sum1;
+    }
+}
+
 // Weights contain one 32-row tile per 128-wide K block. The flat Q8 row
 // contains K int8 values, then four FP16 scales per K block.
 static inline void geniex_ptq1_flat_scales(float scales[4], const uint8_t *scale_bytes, uint32_t block) {
@@ -203,6 +274,32 @@ static inline void geniex_ptq1_dot_pair_flat_q8(uint32_t k, float *outputs0, flo
         for (unsigned row = 0; row < valid_rows0; ++row) outputs0[row] += partial[row];
         geniex_ptq1_dot_tile(&weights1[block], scratch, scales, partial);
         for (unsigned row = 0; row < valid_rows1; ++row) outputs1[row] += partial[row];
+    }
+}
+
+static inline void geniex_ptq1_dot_two_rows_flat_q8(uint32_t k, float *outputs0, float *outputs1,
+    const geniex_ptq1_tile *weights, const void *flat_q8_0, const void *flat_q8_1, unsigned valid_rows,
+    geniex_ptq1_activation *scratch0, geniex_ptq1_activation *scratch1) {
+    const int8_t *quants0 = (const int8_t *)flat_q8_0;
+    const int8_t *quants1 = (const int8_t *)flat_q8_1;
+    const uint8_t *scale_bytes0 = (const uint8_t *)flat_q8_0 + k;
+    const uint8_t *scale_bytes1 = (const uint8_t *)flat_q8_1 + k;
+    float partial0[GENIEX_PTQ1_TILE_ROWS], partial1[GENIEX_PTQ1_TILE_ROWS];
+
+    assert(k % GENIEX_PTQ1_BLOCK_K == 0);
+    assert(valid_rows <= GENIEX_PTQ1_TILE_ROWS);
+    for (unsigned row = 0; row < valid_rows; ++row) outputs0[row] = outputs1[row] = 0.0f;
+    for (uint32_t block = 0; block < k / GENIEX_PTQ1_BLOCK_K; ++block) {
+        float scales0[4], scales1[4];
+        geniex_ptq1_flat_scales(scales0, scale_bytes0, block);
+        geniex_ptq1_flat_scales(scales1, scale_bytes1, block);
+        geniex_ptq1_prepare_activation(scratch0, quants0 + block * GENIEX_PTQ1_BLOCK_K);
+        geniex_ptq1_prepare_activation(scratch1, quants1 + block * GENIEX_PTQ1_BLOCK_K);
+        geniex_ptq1_dot_tile_two(&weights[block], scratch0, scratch1, scales0, scales1, partial0, partial1);
+        for (unsigned row = 0; row < valid_rows; ++row) {
+            outputs0[row] += partial0[row];
+            outputs1[row] += partial1[row];
+        }
     }
 }
 #endif
