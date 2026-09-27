@@ -157,7 +157,7 @@ index 2cd015b..20788d7 100644
      switch (src0->type) {
 +        case GGML_TYPE_PTQ1_0:
 +            if (src0->ne[0] % GENIEX_PTQ1_BLOCK_K || src0->ne[2] != 1 || src0->ne[3] != 1 ||
-+                src0->ne[1] > 32768 || src1->type != GGML_TYPE_F32 ||
++                (uint64_t) src0->ne[1] > sess->vtcm_size / sizeof(float) || src1->type != GGML_TYPE_F32 ||
 +                src1->ne[1] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1 ||
 +                (src0->buffer && !ggml_backend_buffer_is_hexagon_repack(src0->buffer))) {
 +                return false;
@@ -421,7 +421,12 @@ index 6c39366..c36fbc0 100644
                      uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
                      size_t repacked_vtcm_size = htp_mm_round_up(n_prefetch * tile_row_size, 256);
                      src0_sz = repacked_vtcm_size * n_threads;
-@@ -607,6 +616,9 @@ static inline void htp_mm_hvx_vtcm_layout_build(
+@@ -605,8 +614,14 @@ static inline void htp_mm_hvx_vtcm_layout_build(
+                 size_t quant_scratch_size_per_thread = htp_mm_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float));
+                 size_t dst_size_per_thread = dst_nrows > 0 ? htp_mm_round_up(dst_row_size, 128) : 0;
++                if (wtype == HTP_TYPE_PTQ1_0 && dst_nrows > 0) {
++                    dst_size_per_thread = htp_mm_round_up((dst_row_size + n_threads - 1) / n_threads, 128);
++                }
                  if (dst_size_per_thread < quant_scratch_size_per_thread) {
                      dst_size_per_thread = quant_scratch_size_per_thread;
                  }
