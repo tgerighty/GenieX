@@ -5,6 +5,11 @@ set -euo pipefail
 
 prism_htp=${1:?pass the Prism llama.cpp checkout path}
 prism_htp=$prism_htp/ggml/src/ggml-hexagon/htp
+if [[ ${2:-} == --worker && -z ${PTQ1_WORKER_K:-} ]]; then
+    PTQ1_WORKER_K=256 "$0" "${1}" --worker
+    PTQ1_WORKER_K=5120 "$0" "${1}" --worker
+    exit 0
+fi
 sdk=${HEXAGON_SDK_ROOT:-/opt/hexagon/6.6.0.0}
 tools=${HEXAGON_TOOLS_ROOT:-$sdk/tools/HEXAGON_Tools/19.0.07}/Tools/bin
 here=${PTQ1_BENCH_SOURCE_DIR:-$(cd "$(dirname "$0")" && pwd)}
