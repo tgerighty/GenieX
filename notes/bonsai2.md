@@ -19,6 +19,7 @@ docker run --rm -it --user "$(id -u):$(id -g)" --platform linux/amd64 \
 Run these commands inside the container:
 
 ```sh
+export PATH=/opt/rust/cargo/bin:$PATH
 cmake -S . -B build-bonsai2 \
   -DCMAKE_TOOLCHAIN_FILE=/workspace/sdk/cmake/arm64-linux-gnu.cmake \
   -DCMAKE_BUILD_TYPE=Release -DPREBUILT_LIB_DIR=linux_aarch64 \
@@ -27,10 +28,10 @@ cmake -S . -B build-bonsai2 \
   -DGGML_HEXAGON=ON -DGGML_OPENCL=OFF \
   -DHEXAGON_SDK_ROOT=/opt/hexagon/6.6.0.0 \
   -DHEXAGON_TOOLS_ROOT=/opt/hexagon/6.6.0.0/tools/HEXAGON_Tools/19.0.07
-cmake --build build-bonsai2 --target ggml-hexagon htp-v75 --parallel 8
+cmake --build build-bonsai2 --target geniex_llama_cpp --parallel 8
 ```
 
-This builds the ARM64 Hexagon backend and the VENTUNO Q v75 HTP skeleton `libggml-htp-v75.so`. The current toolchain image has no `cargo`, so a full `geniex_llama_cpp` build needs a Rust-capable environment. An Intel host cannot run these ARM64 binaries. The PTQ1_0 HTP path accepts K divisible by 128 when the VTCM budget fits. The current branch also routes eligible multi-row prefill through HTP. Fused operations and unsupported shapes can still use the CPU. No full-model inference has run on an HTP device.
+This builds the ARM64 GenieX plugin and Hexagon backend, plus the VENTUNO Q v75 HTP skeleton `libggml-htp-v75.so`. The toolchain image includes Cargo at `/opt/rust/cargo/bin`; a login shell can omit it from `PATH`. An Intel host cannot run these ARM64 binaries. The PTQ1_0 HTP path accepts K divisible by 128 when the VTCM budget fits. The current branch also routes eligible multi-row prefill through HTP. Fused operations and unsupported shapes can still use the CPU. No full-model inference has run on an HTP device.
 
 With a GenieX CLI built against this SDK, use `geniex pull prism-ml/Ternary-Bonsai-2-27B-gguf:PTQ1_0 --model-type llm`. The explicit model type keeps the vision projector out of the download.
 
@@ -83,4 +84,4 @@ Commit `10791a44`, stacked on PR #9, adds the PTQ1_0 multi-row flat HTP matmul r
 
 The test calls the production `hvx_mm_matmul` worker with synthetic packed weights. Run `PTQ1_WORKER_K=5120 PTQ1_WORKER_M=3 /workspace/tests/hexagon/run-ptq1-dma-bench.sh /prism --worker` in the toolchain container with a patched Prism tree. The v75 `-O2 -fpic` simulator passed K=256 with M=1, 2, and 3, K=5120 with M=1, 3, and 4, and K=17408 with M=3. With the final test source, K=5120, M=3 used 24,884,091 total Pcycles; K=17408, M=3 used 84,360,141. The test checks each result against scalar PTQ1 arithmetic, F32-to-Q8 reconstruction, row bias, a partial 17-row tile, output padding, and a 128-byte VTCM-end guard. PR #9 rejects M=3, so there is no paired NPU prefill speed baseline. With the same test source, the M=1 run matched PR #9 at 546,864 total Pcycles for K=256 and 9,255,738 for K=5120. These totals include test setup and scalar checks, not only worker time.
 
-The candidate keeps the paired decode proxy at 4,346,583 Pcycles with checksum `-4122.0`. The v75 scalar test and DMA output checks passed. The ARM64 `ggml-hexagon` and v75 HTP targets built on native Intel plexserver. The full `geniex_llama_cpp` target stopped before the plugin because the toolchain image has no `cargo`. This test uses one worker thread and bypasses the host repacker. It does not run the full model. There is no simulated or board prefill/decode tokens/s result, and no verified full-model NPU placement.
+The candidate keeps the paired decode proxy at 4,346,583 Pcycles with checksum `-4122.0`. The v75 scalar test and DMA output checks passed. The full `geniex_llama_cpp` target built on native Intel plexserver; `file` identified the plugin and Hexagon backend as ARM64 ELF objects and the v75 skeleton as a Qualcomm DSP6 ELF object. This test uses one worker thread and bypasses the host repacker. It does not run the full model. There is no simulated or board prefill/decode tokens/s result, and no verified full-model NPU placement.
