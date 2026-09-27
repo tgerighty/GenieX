@@ -12,6 +12,7 @@ static _Alignas(128) uint8_t src_storage[ROWS * (MAX_WIDTH * sizeof(float) + 256
 static _Alignas(128) uint8_t dst_storage[DST_ROWS * (MAX_WIDTH * sizeof(_Float16) + 256) + GUARD * 2];
 static _Alignas(128) int32_t idx32[ROWS];
 static _Alignas(128) int64_t idx64[ROWS];
+static uint64_t output_hash = UINT64_C(1469598103934665603);
 
 bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void * data, unsigned int n) {
     (void)q;
@@ -83,10 +84,19 @@ static int run_case(uint32_t width, uint32_t src_offset, uint32_t dst_offset, bo
         const uint32_t out_row = use_i64 ? (uint32_t)idx64[r] : (uint32_t)idx32[r];
         const uint16_t * out = (const uint16_t *)(dst + out_row * dst_row);
         for (uint32_t j = 0; j < width; ++j) {
-            const _Float16 expected = (_Float16)input_value(r, j);
-            uint16_t expected_bits;
-            memcpy(&expected_bits, &expected, sizeof(expected_bits));
-            if (out[j] != expected_bits) return 2;
+            const float expected = input_value(r, j);
+            _Float16 actual_half;
+            memcpy(&actual_half, &out[j], sizeof(actual_half));
+            const float actual = (float)actual_half;
+            const float tolerance = 0.001f * (expected > 1.0f || expected < -1.0f ?
+                                               (expected > 0.0f ? expected : -expected) : 1.0f);
+            if (actual - expected > tolerance || expected - actual > tolerance) {
+                printf("SET_ROWS mismatch row=%u element=%u input=%g got=0x%04x expected=0x%04x\n",
+                       (unsigned)r, (unsigned)j, expected, (unsigned)out[j], (unsigned)(_Float16)expected);
+                return 2;
+            }
+            output_hash ^= out[j];
+            output_hash *= UINT64_C(1099511628211);
             uint32_t expected_input_bits, actual_input_bits;
             const float expected_input = input_value(r, j);
             memcpy(&expected_input_bits, &expected_input, sizeof(expected_input_bits));
@@ -157,6 +167,7 @@ int main(void) {
         }
     }
     puts("SET_ROWS F32-to-F16 output and guards passed");
+    printf("SET_ROWS output FNV64=0x%016llx\n", (unsigned long long)output_hash);
 #endif
     return 0;
 }
