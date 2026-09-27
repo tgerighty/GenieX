@@ -79,14 +79,6 @@ static inline HVX_Vector geniex_ptq1_decode_trit(HVX_Vector bytes, unsigned powe
 }
 
 static inline void geniex_ptq1_accumulate(
-    HVX_VectorPair products, unsigned power, const geniex_ptq1_act_pair *activation, HVX_Vector sums[2]) {
-    const HVX_Vector     lo       = geniex_ptq1_decode_trit(Q6_V_lo_W(products), power);
-    const HVX_Vector     hi       = geniex_ptq1_decode_trit(Q6_V_hi_W(products), power);
-    sums[0]                       = Q6_Vh_vmpyiacc_VhVhVh(sums[0], lo, activation->lo);
-    sums[1]                       = Q6_Vh_vmpyiacc_VhVhVh(sums[1], hi, activation->hi);
-}
-
-static inline void geniex_ptq1_accumulate_radix3(
     HVX_Vector *scaled_lo, HVX_Vector *scaled_hi, const geniex_ptq1_act_pair *activation, HVX_Vector sums[2]) {
     const HVX_Vector one       = Q6_Vh_vsplat_R(1);
     const HVX_Vector mask      = Q6_Vh_vsplat_R(255);
@@ -124,7 +116,7 @@ static inline void geniex_ptq1_dot_tile(
 #pragma clang loop unroll(full)
             for (unsigned n = 0; n < 5; ++n) {
                 const unsigned scale_index = (group * 40 + n * 8 + m) / 32;
-                geniex_ptq1_accumulate_radix3(
+                geniex_ptq1_accumulate(
                     &scaled_lo, &scaled_hi, &activation->qs[group][n][m / 4], acc[scale_index]);
             }
         }
