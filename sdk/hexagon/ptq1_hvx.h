@@ -79,9 +79,7 @@ static inline HVX_Vector geniex_ptq1_decode_trit(HVX_Vector bytes, unsigned powe
 }
 
 static inline void geniex_ptq1_accumulate(
-    const uint8_t *codes, unsigned power, const geniex_ptq1_act_pair *activation, HVX_Vector sums[4]) {
-    const HVX_Vector     packed   = *(const HVX_UVector *)codes;
-    const HVX_VectorPair products = Q6_Wuh_vunpack_Vub(packed);
+    HVX_VectorPair products, unsigned power, const geniex_ptq1_act_pair *activation, HVX_Vector sums[4]) {
     const HVX_Vector     lo       = geniex_ptq1_decode_trit(Q6_V_lo_W(products), power);
     const HVX_Vector     hi       = geniex_ptq1_decode_trit(Q6_V_hi_W(products), power);
     const HVX_VectorPair p0       = Q6_Ww_vmpy_VhVh(lo, activation->lo);
@@ -107,18 +105,19 @@ static inline void geniex_ptq1_dot_tile(
     }
 
     for (unsigned group = 0; group < 3; ++group) {
+        for (unsigned m = 0; m < 8; m += 4) {
+            const HVX_VectorPair products = Q6_Wuh_vunpack_Vub(*(const HVX_UVector *)tile->qs[group * 8 + m]);
 #pragma clang loop unroll(full)
-        for (unsigned n = 0; n < 5; ++n) {
-            for (unsigned m = 0; m < 8; m += 4) {
+            for (unsigned n = 0; n < 5; ++n) {
                 const unsigned scale_index = (group * 40 + n * 8 + m) / 32;
-                geniex_ptq1_accumulate(
-                    tile->qs[group * 8 + m], powers[n], &activation->qs[group][n][m / 4], acc[scale_index]);
+                geniex_ptq1_accumulate(products, powers[n], &activation->qs[group][n][m / 4], acc[scale_index]);
             }
         }
     }
+    const HVX_VectorPair qh_products = Q6_Wuh_vunpack_Vub(*(const HVX_UVector *)tile->qh[0]);
 #pragma clang loop unroll(full)
     for (unsigned n = 0; n < 4; ++n) {
-        geniex_ptq1_accumulate(tile->qh[0], powers[n], &activation->qh[n], acc[3]);
+        geniex_ptq1_accumulate(qh_products, powers[n], &activation->qh[n], acc[3]);
     }
 #ifdef PTQ1_SCALAR_REDUCE
     for (unsigned b = 0; b < 4; ++b) {
