@@ -106,10 +106,16 @@ static uint64_t hash_floats(const float * data, unsigned n, uint64_t hash) {
 
 int main(void) {
     init_case();
-    if (dma_queue_sizeof(8) > sizeof(queue_storage)) return 1;
+    if (dma_queue_sizeof(8) > sizeof(queue_storage)) {
+        printf("GDN queue storage too small: %zu\n", dma_queue_sizeof(8));
+        return 1;
+    }
     const size_t state_bytes = (size_t) S * S * sizeof(float);
     const size_t vtcm_bytes = 2 * ((state_bytes + 127) & ~(size_t) 127);
-    if (vtcm_bytes + 128 > sizeof(vtcm)) return 2;
+    if (vtcm_bytes + 128 > sizeof(vtcm)) {
+        printf("GDN VTCM test storage too small: %zu\n", vtcm_bytes);
+        return 2;
+    }
 
     struct htp_tensor q = { .data = (uint32_t) (uintptr_t) q_data, .type = HTP_TYPE_F32,
         .ne = {S, H, T, 1}, .nb = {4, S * 4, S * H * 4, S * H * T * 4} };
@@ -133,14 +139,27 @@ int main(void) {
     ctx.vtcm_size = vtcm_bytes;
     ctx.dma[0] = dma_queue_init(queue_storage, 8, (uintptr_t) vtcm, vtcm_bytes, &ctx.trace[0]);
     for (unsigned i = 0; i < GDN_REPEATS; ++i) {
-        if (op_gated_delta_net(&octx) != HTP_STATUS_OK) return 3;
+        const int status = op_gated_delta_net(&octx);
+        if (status != HTP_STATUS_OK) {
+            printf("GDN operation status %d\n", status);
+            return 3;
+        }
     }
     dma_queue_flush(ctx.dma[0]);
-    for (unsigned i = 0; i < 128; ++i) if (vtcm[vtcm_bytes + i] != 0xa5) return 4;
-    for (unsigned i = 0; i < 32; ++i) if (dst_data[T * S * H + S * S * H + i] != 12345.0f) return 5;
+    for (unsigned i = 0; i < 128; ++i) if (vtcm[vtcm_bytes + i] != 0xa5) {
+        printf("GDN VTCM guard changed at %u\n", i);
+        return 4;
+    }
+    for (unsigned i = 0; i < 32; ++i) if (dst_data[T * S * H + S * S * H + i] != 12345.0f) {
+        printf("GDN output guard changed at %u\n", i);
+        return 5;
+    }
     for (unsigned i = 0; i < S * S * H; ++i) {
         const float original = ((int) ((i * 17u + 3u) % 29u) - 14) * 0.0002f;
-        if (state_in[i] != original) return 6;
+        if (state_in[i] != original) {
+            printf("GDN input state changed at %u\n", i);
+            return 6;
+        }
     }
     scalar_reference();
     for (unsigned i = 0; i < T * S * H; ++i) {
