@@ -331,7 +331,7 @@ index 9d38546..d4a9dc5 100644
 +
  #define QUANTIZE_IMPL(name, log_name, kernel_fn, dst_row_size_expr)                                        \
  static void name(unsigned int nth, unsigned int ith, void * data) {                                        \
-@@ -896,17 +915,41 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
+@@ -896,17 +915,50 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
      htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, mmctx->quant_ib_first[ith]);
  }
  
@@ -368,8 +368,17 @@ index 9d38546..d4a9dc5 100644
 +    if (bias) for (int ptq1_row = 0; ptq1_row < (rows); ++ptq1_row) (s)[ptq1_row] += (bias)[ptq1_row]; \
 +} while (0)
 +#define PTQ1_DOT_2X2_MM(n, s0, s1, w, y0, y1, rows, bias0, bias1) do { \
-+    PTQ1_DOT_2X1_MM(n, s0, w, y0, rows, bias0); \
-+    PTQ1_DOT_2X1_MM(n, s1, w, y1, rows, bias1); \
++    if ((size_t) (n) * sizeof(float) >= HTP_MM_PTQ1_ACT_SCRATCH_SIZE) { \
++        /* Quant scratch is idle after hvx_mm_run_quant_task's barrier. */ \
++        geniex_ptq1_dot_two_rows_flat_q8((n), (s0), (s1), (const geniex_ptq1_tile *) (w), \
++            (y0), (y1), (rows), (geniex_ptq1_activation *) vtcm_dst_ptr, \
++            (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE)); \
++        if (bias0) for (int ptq1_row = 0; ptq1_row < (rows); ++ptq1_row) (s0)[ptq1_row] += (bias0)[ptq1_row]; \
++        if (bias1) for (int ptq1_row = 0; ptq1_row < (rows); ++ptq1_row) (s1)[ptq1_row] += (bias1)[ptq1_row]; \
++    } else { \
++        PTQ1_DOT_2X1_MM(n, s0, w, y0, rows, bias0); \
++        PTQ1_DOT_2X1_MM(n, s1, w, y1, rows, bias1); \
++    } \
 +} while (0)
 +#define PTQ1_DOT_PAIR(n, s0, s1, w0, w1, y, rows0, rows1, sz) \
 +    geniex_ptq1_dot_pair_flat_q8((n), (s0), (s1), (const geniex_ptq1_tile *) (w0), \
