@@ -133,8 +133,8 @@ int main(void) {
     struct htp_tensor dst = { .data = (uint32_t) (uintptr_t) dst_data, .type = HTP_TYPE_F32,
         .ne = {S * H, T + S, 1, 1}, .nb = {4, S * H * 4, S * H * (T + S) * 4, S * H * (T + S) * 4} };
     struct htp_context ctx = {0};
-    struct htp_ops_context octx = { .ctx = &ctx, .src = {&q, &k, &v, &g, &beta, &state},
-        .dst = &dst, .n_threads = 1 };
+    struct htp_ops_context octx = { .ctx = &ctx, .op_params = {1},
+        .src = {&q, &k, &v, &g, &beta, &state}, .dst = &dst, .n_threads = 1 };
     ctx.vtcm_base = vtcm;
     ctx.vtcm_size = vtcm_bytes;
     ctx.dma[0] = dma_queue_init(queue_storage, 8, (uintptr_t) vtcm, vtcm_bytes, &ctx.trace[0]);
