@@ -59,34 +59,14 @@ pub fn infer_manifest_from_names(
     sizes: &HashMap<String, i64>,
     hint: ManifestHint,
 ) -> Result<ModelManifest> {
-    let mut ggufs: HashMap<String, Vec<&String>> = HashMap::new(); // quant -> files
-    let mut mmprojs: Vec<&String> = Vec::new();
-    let mut tokenizers: Vec<&String> = Vec::new();
-    let mut onnx_files: Vec<&String> = Vec::new();
-    let mut geniex_files: Vec<&String> = Vec::new();
-    let mut npy_files: Vec<&String> = Vec::new();
-
-    for n in file_names {
-        let lname = n.to_lowercase();
-        if is_weight_gguf(&lname) {
-            let quant = extract_quant(n)
-                .or_else(|| hint.header_quants.get(n).cloned())
-                .unwrap_or_else(|| "DEFAULT".to_string());
-            ggufs.entry(quant).or_default().push(n);
-        } else if lname.ends_with(".gguf") {
-            if is_mmproj_filename(&lname) {
-                mmprojs.push(n);
-            }
-        } else if lname.ends_with("tokenizer.json") {
-            tokenizers.push(n);
-        } else if lname.ends_with(".onnx") {
-            onnx_files.push(n);
-        } else if lname.ends_with(".geniex") {
-            geniex_files.push(n);
-        } else if lname.ends_with(".npy") {
-            npy_files.push(n);
-        }
-    }
+    let FileCandidates {
+        mut ggufs,
+        mmprojs,
+        tokenizers,
+        onnx_files,
+        geniex_files,
+        npy_files,
+    } = collect_file_candidates(file_names, &hint.header_quants);
 
     if ggufs.is_empty() && onnx_files.is_empty() && geniex_files.is_empty() {
         return Err(Error::ManifestInferenceFailed(format!(
@@ -123,30 +103,7 @@ pub fn infer_manifest_from_names(
 
     // MMProj: 0 -> try single onnx/geniex; 1 -> use; >1 -> prefer FP16 over
     // BF16/F32/etc, then largest.
-    let mut mmproj_file = match mmprojs.len() {
-        0 => {
-            if onnx_files.len() == 1 {
-                file_info(onnx_files[0], sizes)
-            } else if geniex_files.len() == 1 {
-                file_info(geniex_files[0], sizes)
-            } else {
-                ModelFileInfo::default()
-            }
-        }
-        1 => file_info(mmprojs[0], sizes),
-        _ => {
-            let chosen = mmprojs
-                .iter()
-                .max_by_key(|n| {
-                    (
-                        is_preferred_mmproj_precision(n),
-                        sizes.get(n.as_str()).copied().unwrap_or(0),
-                    )
-                })
-                .unwrap();
-            file_info(chosen, sizes)
-        }
-    };
+    let mut mmproj_file = select_projector(&mmprojs, &onnx_files, &geniex_files, sizes);
 
     let model_type = infer_model_type(&hint, file_names);
     if model_type == ModelType::Llm && (!mmprojs.is_empty() || !model_file.is_empty()) {
@@ -201,6 +158,77 @@ pub fn infer_manifest_from_names(
         tokenizer_file,
         extra_files,
     })
+}
+
+#[derive(Default)]
+struct FileCandidates<'a> {
+    ggufs: HashMap<String, Vec<&'a String>>,
+    mmprojs: Vec<&'a String>,
+    tokenizers: Vec<&'a String>,
+    onnx_files: Vec<&'a String>,
+    geniex_files: Vec<&'a String>,
+    npy_files: Vec<&'a String>,
+}
+
+fn collect_file_candidates<'a>(
+    file_names: &'a [String],
+    header_quants: &HashMap<String, String>,
+) -> FileCandidates<'a> {
+    let mut files = FileCandidates::default();
+    for name in file_names {
+        let lower = name.to_lowercase();
+        if is_weight_gguf(&lower) {
+            let quant = extract_quant(name)
+                .or_else(|| header_quants.get(name).cloned())
+                .unwrap_or_else(|| "DEFAULT".to_string());
+            files.ggufs.entry(quant).or_default().push(name);
+        } else if lower.ends_with(".gguf") {
+            if is_mmproj_filename(&lower) {
+                files.mmprojs.push(name);
+            }
+        } else if lower.ends_with("tokenizer.json") {
+            files.tokenizers.push(name);
+        } else if lower.ends_with(".onnx") {
+            files.onnx_files.push(name);
+        } else if lower.ends_with(".geniex") {
+            files.geniex_files.push(name);
+        } else if lower.ends_with(".npy") {
+            files.npy_files.push(name);
+        }
+    }
+    files
+}
+
+fn select_projector(
+    mmprojs: &[&String],
+    onnx_files: &[&String],
+    geniex_files: &[&String],
+    sizes: &HashMap<String, i64>,
+) -> ModelFileInfo {
+    match mmprojs.len() {
+        0 => {
+            if onnx_files.len() == 1 {
+                file_info(onnx_files[0], sizes)
+            } else if geniex_files.len() == 1 {
+                file_info(geniex_files[0], sizes)
+            } else {
+                ModelFileInfo::default()
+            }
+        }
+        1 => file_info(mmprojs[0], sizes),
+        _ => {
+            let chosen = mmprojs
+                .iter()
+                .max_by_key(|name| {
+                    (
+                        is_preferred_mmproj_precision(name),
+                        sizes.get(name.as_str()).copied().unwrap_or(0),
+                    )
+                })
+                .unwrap();
+            file_info(chosen, sizes)
+        }
+    }
 }
 
 /// Tiered modality classifier. Order is deliberate: explicit user
@@ -386,46 +414,16 @@ pub(crate) fn extract_quant(name: &str) -> Option<String> {
             continue;
         }
         // Longer prefixes first so BF16/FP16 don't collapse to F16.
-        let mut matched = false;
-        for prefix in [b"MXFP" as &[u8], b"BF", b"FP", b"F", b"I"] {
-            if let Some(end) = scan_token(bytes, i, prefix) {
-                if let Ok(s) = std::str::from_utf8(&bytes[i..end]) {
-                    composite.push(s.to_string());
-                }
-                i = end;
-                matched = true;
-                break;
+        let scalar_end = [b"MXFP" as &[u8], b"BF", b"FP", b"F", b"I"]
+            .into_iter()
+            .find_map(|prefix| scan_token(bytes, i, prefix));
+        if let Some(end) = scalar_end.or_else(|| scan_q_token(bytes, i)) {
+            if let Ok(s) = std::str::from_utf8(&bytes[i..end]) {
+                composite.push(s.to_string());
             }
-        }
-        if matched {
-            continue;
-        }
-        // Optional prefixes used by i-quants, ternary quants, and Prism quants.
-        let mut j = i;
-        if (bytes[j] == b'I' || bytes[j] == b'T') && j + 1 < bytes.len() && bytes[j + 1] == b'Q' {
-            j += 1;
-        } else if bytes[j] == b'P' {
-            j += 1;
-            if j < bytes.len() && bytes[j] == b'T' {
-                j += 1;
-            }
-        }
-        if !(j < bytes.len()
-            && bytes[j] == b'Q'
-            && j + 1 < bytes.len()
-            && bytes[j + 1].is_ascii_digit())
-        {
+            i = end;
+        } else {
             i += 1;
-            continue;
-        }
-        let start = i;
-        i = j + 2;
-        while i < bytes.len() && bytes[i].is_ascii_digit() {
-            i += 1;
-        }
-        i = consume_short_suffix_segments(bytes, i);
-        if let Ok(s) = std::str::from_utf8(&bytes[start..i]) {
-            composite.push(s.to_string());
         }
     }
     if composite.is_empty() {
@@ -437,6 +435,27 @@ pub(crate) fn extract_quant(name: &str) -> Option<String> {
         }
     }
     Some(composite.remove(0))
+}
+
+/// Scan a Q tag, including optional I, T, P, or PT prefixes.
+fn scan_q_token(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut q = start;
+    if matches!(bytes[q], b'I' | b'T') && bytes.get(q + 1) == Some(&b'Q') {
+        q += 1;
+    } else if bytes[q] == b'P' {
+        q += 1;
+        if bytes.get(q) == Some(&b'T') {
+            q += 1;
+        }
+    }
+    if bytes.get(q) != Some(&b'Q') || !bytes.get(q + 1).is_some_and(u8::is_ascii_digit) {
+        return None;
+    }
+    let mut end = q + 2;
+    while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+        end += 1;
+    }
+    Some(consume_short_suffix_segments(bytes, end))
 }
 
 /// If the slice at `start` begins with `prefix` followed by ≥1 digit, return
