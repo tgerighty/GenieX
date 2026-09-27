@@ -202,7 +202,7 @@ int main(void) {
         const float error = fabsf(dst_data[i] - ref_output[i]);
         if (magnitude > max_output_magnitude) max_output_magnitude = magnitude;
         if (error > max_output_error) max_output_error = error;
-        if (!(error <= 0.000001f)) {
+        if (!(error <= 0.0000001f)) {
             printf("output mismatch %u: %.8f != %.8f\n", i, dst_data[i], ref_output[i]);
             return 7;
         }
@@ -215,7 +215,7 @@ int main(void) {
             const float delta = fabsf(ref_state[i] - no_delta);
             if (delta > max_state_delta) max_state_delta = delta;
         }
-        if (!(error <= 0.000001f)) {
+        if (!(error <= 0.0000001f)) {
             printf("state mismatch %u: %.8f != %.8f\n", i, dst_data[T * S * H + i], ref_state[i]);
             return 8;
         }
