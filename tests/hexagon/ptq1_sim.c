@@ -315,6 +315,15 @@ int main(void) {
             return 1;
         }
     }
+    for (unsigned k = 0; k < 128; ++k) activation[k] = -128;
+    geniex_ptq1_prepare_activation(&prepared, activation);
+    geniex_ptq1_dot_tile(&tile, &prepared, scales, hvx_outputs);
+    for (unsigned row = 0; row < TILE_ROWS; ++row) {
+        if (hvx_outputs[row] != dot_reference_scaled(&blocks[row], activation, scales)) {
+            printf("PTQ1_0 HVX -128 mismatch at row %u\n", row);
+            return 1;
+        }
+    }
 
     geniex_ptq1_tile two_tiles[2];
     uint8_t          flat_q8[384] __attribute__((aligned(128)));
