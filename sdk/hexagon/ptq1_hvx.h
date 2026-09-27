@@ -79,11 +79,17 @@ static inline HVX_Vector geniex_ptq1_decode_trit(HVX_Vector bytes, unsigned powe
 }
 
 static inline void geniex_ptq1_accumulate(
-    HVX_VectorPair products, unsigned power, const geniex_ptq1_act_pair *activation, HVX_Vector sums[2]) {
-    const HVX_Vector     lo       = geniex_ptq1_decode_trit(Q6_V_lo_W(products), power);
-    const HVX_Vector     hi       = geniex_ptq1_decode_trit(Q6_V_hi_W(products), power);
-    sums[0]                       = Q6_Vh_vmpyiacc_VhVhVh(sums[0], lo, activation->lo);
-    sums[1]                       = Q6_Vh_vmpyiacc_VhVhVh(sums[1], hi, activation->hi);
+    HVX_Vector *scaled_lo, HVX_Vector *scaled_hi, const geniex_ptq1_act_pair *activation, HVX_Vector sums[2]) {
+    const HVX_Vector one       = Q6_Vh_vsplat_R(1);
+    const HVX_Vector mask      = Q6_Vh_vsplat_R(255);
+    const HVX_Vector triple_lo = Q6_Vh_vadd_VhVh(*scaled_lo, Q6_Vh_vasl_VhR(*scaled_lo, 1));
+    const HVX_Vector triple_hi = Q6_Vh_vadd_VhVh(*scaled_hi, Q6_Vh_vasl_VhR(*scaled_hi, 1));
+    const HVX_Vector trit_lo   = Q6_Vh_vsub_VhVh(Q6_Vh_vasr_VhR(triple_lo, 8), one);
+    const HVX_Vector trit_hi   = Q6_Vh_vsub_VhVh(Q6_Vh_vasr_VhR(triple_hi, 8), one);
+    sums[0]                    = Q6_Vh_vmpyiacc_VhVhVh(sums[0], trit_lo, activation->lo);
+    sums[1]                    = Q6_Vh_vmpyiacc_VhVhVh(sums[1], trit_hi, activation->hi);
+    *scaled_lo                 = Q6_V_vand_VV(triple_lo, mask);
+    *scaled_hi                 = Q6_V_vand_VV(triple_hi, mask);
 }
 
 static inline void geniex_ptq1_dot_tile(
@@ -105,10 +111,13 @@ static inline void geniex_ptq1_dot_tile(
 #pragma clang loop unroll(full)
         for (unsigned m = 0; m < 8; m += 4) {
             const HVX_VectorPair products = Q6_Wuh_vunpack_Vub(*(const HVX_UVector *)tile->qs[group * 8 + m]);
+            HVX_Vector scaled_lo = Q6_V_lo_W(products);
+            HVX_Vector scaled_hi = Q6_V_hi_W(products);
 #pragma clang loop unroll(full)
             for (unsigned n = 0; n < 5; ++n) {
                 const unsigned scale_index = (group * 40 + n * 8 + m) / 32;
-                geniex_ptq1_accumulate(products, powers[n], &activation->qs[group][n][m / 4], acc[scale_index]);
+                geniex_ptq1_accumulate(
+                    &scaled_lo, &scaled_hi, &activation->qs[group][n][m / 4], acc[scale_index]);
             }
         }
     }
