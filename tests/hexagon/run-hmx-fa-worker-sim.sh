@@ -12,7 +12,7 @@ trap 'rm -rf "$build_dir"' EXIT
 includes=(-I"$prism_htp" -I"$prism_htp/.." -I"$prism_htp/../.."
     -I"$prism_htp/../../include" -I"$sdk/incs" -I"$sdk/incs/stddef"
     -I"$sdk/rtos/qurt/computev75/include/qurt")
-flags=(-mcpu=v75 -mv75 -mhvx=v75 -mhmx -O2 -fpic -ffunction-sections -fdata-sections)
+flags=(-mcpu=v75 -mv75 -mhvx=v75 -mhmx -O2 -g -fpic -ffunction-sections -fdata-sections)
 "$tools/hexagon-clang" "${includes[@]}" "${flags[@]}" \
     -DHMX_FA_KV_LEN="${HMX_FA_KV_LEN:-64}" -DHMX_FA_Q_LEN="${HMX_FA_Q_LEN:-1}" \
     -DHMX_FA_REPEATS="${HMX_FA_REPEATS:-1}" \
@@ -26,6 +26,8 @@ flags=(-mcpu=v75 -mv75 -mhvx=v75 -mhmx -O2 -fpic -ffunction-sections -fdata-sect
     -L"$sdk/rtos/qurt/computev75/lib" -lqurt -lm -o "$build_dir/worker.elf"
 if ! output=$("$tools/hexagon-sim" --march v75na_1 -r "$build_dir/worker.elf" 2>&1); then
     printf '%s\n' "$output" >&2
+    pc=$(sed -n 's/.* PC=\([0-9A-Fa-f]*\) VADDR=.*/\1/p' <<< "$output" | head -n 1)
+    if [[ -n $pc ]]; then "$tools/hexagon-addr2line" -f -C -e "$build_dir/worker.elf" "0x$pc" >&2; fi
     exit 1
 fi
 grep -F "HMX FA worker L=${HMX_FA_KV_LEN:-64} Q=${HMX_FA_Q_LEN:-1} repeats=${HMX_FA_REPEATS:-1}" <<< "$output"
