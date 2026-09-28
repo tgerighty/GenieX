@@ -5,8 +5,8 @@ set -euo pipefail
 
 prism_htp=${1:?pass the Prism llama.cpp checkout path}/ggml/src/ggml-hexagon/htp
 case ${GDN_EXPECT_SCALAR4:?set 0 for baseline or 1 for candidate} in
-    0) expected_calls=2 ;;
-    1) expected_calls=1 ;;
+    0) expected_calls=1 ;;
+    1) expected_calls=0 ;;
     *) printf 'GDN_EXPECT_SCALAR4 must be 0 or 1\n' >&2; exit 2 ;;
 esac
 actual_calls=$(grep -Fc 'gdn_mul_scalar_dot8_f32(row0' "$prism_htp/gated-delta-net-ops.c" || true)

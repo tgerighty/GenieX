@@ -111,6 +111,9 @@ static uint64_t hash_floats(const float * data, unsigned n, uint64_t hash) {
 }
 
 static uint64_t expected_hash(void) {
+    if (S == 128 && H == 48 && T == 2 && !GDN_VECTOR_GATE) return UINT64_C(0x04bf4185cc9298d2);
+    if (S == 10 && H == 3 && T == 2 && !GDN_VECTOR_GATE) return UINT64_C(0x3983a390f9c5b2e5);
+    if (S == 128 && H == 2 && T == 2 && GDN_VECTOR_GATE) return UINT64_C(0xa260c50138568a2b);
     if (S == 128 && H == 48 && T == 1 && !GDN_VECTOR_GATE) return UINT64_C(0xd328f0e8c0b3a647);
     if (S == 128 && H == 32 && T == 1 && !GDN_VECTOR_GATE) return UINT64_C(0x84a4bde95f58714b);
     if (S == 10 && H == 3 && T == 1 && !GDN_VECTOR_GATE) return UINT64_C(0x875fe36b686b76e2);
