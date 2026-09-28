@@ -221,7 +221,7 @@ static inline void geniex_ptq1_dot_tile_two(
         *(HVX_Vector *)partial0[b] = Q6_Vh_vadd_VhVh(combined0, Q6_V_vror_VR(combined0, 64));
         *(HVX_Vector *)partial1[b] = Q6_Vh_vadd_VhVh(combined1, Q6_V_vror_VR(combined1, 64));
     }
-#pragma clang loop unroll_count(2)
+#pragma clang loop unroll_count(4)
     for (unsigned row = 0; row < valid_rows; ++row) {
         float sum0 = 0.0f, sum1 = 0.0f;
         for (unsigned b = 0; b < 4; ++b) {
