@@ -248,9 +248,9 @@ index 9d38546..300f1d3 100644
      }                                                                                                                             \
                                                                                                                                    \
 +    enum { ptq1_scales_per_row = 4 * (5120 / GENIEX_PTQ1_BLOCK_K) };                                                              \
-+    float ptq1_prefill_scales[4 * ptq1_scales_per_row];                                                                            \
++    float ptq1_prefill_scales[8 * ptq1_scales_per_row];                                                                            \
 +    const float * ptq1_prefill_scale_table = NULL;                                                                                \
-+    if (PAIR_ENABLED && src1_nrows >= 2 && src1_nrows <= 4 && ne10 == 5120 && ct_end - ct_start >= 4) {                         \
++    if (PAIR_ENABLED && src1_nrows >= 2 && src1_nrows <= 8 && ne10 == 5120 && ct_end - ct_start >= 4) {                         \
 +        for (uint32_t row = 0; row < (src1_nrows & ~1u); ++row) {                                                                 \
 +            geniex_ptq1_prepare_flat_scales(ptq1_prefill_scales + row * ptq1_scales_per_row, src1_data + row * src1_stride, ne10); \
 +        }                                                                                                                         \
