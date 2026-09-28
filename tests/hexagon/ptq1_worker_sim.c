@@ -80,7 +80,7 @@ int main(void) {
         for (unsigned kb = 0; kb < KB; ++kb) {
             geniex_ptq1_pack_tile(&weights[ct][kb], blocks, KB, kb,
                 ct + 1 == TILES ? N - ct * GENIEX_PTQ1_TILE_ROWS : GENIEX_PTQ1_TILE_ROWS);
-            weights[ct][kb].qs[0][ct] ^= ct + kb + 1;
+            weights[ct][kb].qs[0][ct % GENIEX_PTQ1_TILE_ROWS] ^= ct + kb + 1;
         }
     }
     for (unsigned ir = 0; ir < M; ++ir) {
