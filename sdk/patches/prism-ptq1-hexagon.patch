@@ -477,7 +477,7 @@ index 9d38546..300f1d3 100644
 +            float *cache = (float *) (vtcm_dst_ptr + HTP_MM_PTQ1_ACT_SCRATCH_SIZE); \
 +            if (ir1 == 0) { \
 +                geniex_ptq1_prepare_weight_scales(cache, (const geniex_ptq1_tile *) (w0), (n), (rows0)); \
-+                geniex_ptq1_prepare_weight_scales(cache + (n), (const geniex_ptq1_tile *) (w1), (n), (rows1)); \
++                geniex_ptq1_prepare_weight_scales(cache + (n) / 4, (const geniex_ptq1_tile *) (w1), (n), (rows1)); \
 +            } \
 +            ptq1_weight_scales = cache; \
 +        } \
@@ -487,7 +487,7 @@ index 9d38546..300f1d3 100644
 +            (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE), \
 +            ptq1_prefill_scale_table ? ptq1_prefill_scale_table + ir1 * ptq1_scales_per_row : NULL, \
 +            ptq1_prefill_scale_table ? ptq1_prefill_scale_table + (ir1 + 1) * ptq1_scales_per_row : NULL, \
-+            ptq1_weight_scales, ptq1_weight_scales ? ptq1_weight_scales + (n) : NULL); \
++            ptq1_weight_scales, ptq1_weight_scales ? ptq1_weight_scales + (n) / 4 : NULL); \
 +        if (bias0) { \
 +            for (int ptq1_row = 0; ptq1_row < (rows0); ++ptq1_row) (s0)[ptq1_row] += (bias0)[ptq1_row]; \
 +            for (int ptq1_row = 0; ptq1_row < (rows1); ++ptq1_row) (s0)[32 + ptq1_row] += (bias0)[32 + ptq1_row]; \
