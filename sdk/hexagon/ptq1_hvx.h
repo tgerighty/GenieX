@@ -162,7 +162,7 @@ static inline void geniex_ptq1_dot_tile(
         *(HVX_Vector *)partial[b] = Q6_Vh_vadd_VhVh(combined, Q6_V_vror_VR(combined, 64));
     }
 #endif
-#pragma clang loop unroll_count(2)
+#pragma clang loop unroll_count(4)
     for (unsigned row = 0; row < GENIEX_PTQ1_TILE_ROWS; ++row) {
 #ifdef PTQ1_SCALAR_REDUCE
         const unsigned lane = row;
