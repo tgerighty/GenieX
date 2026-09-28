@@ -184,7 +184,7 @@ static inline void geniex_ptq1_dot_tile(
 static inline void geniex_ptq1_dot_tile_two(
     const geniex_ptq1_tile *tile, const geniex_ptq1_activation *act0,
     const geniex_ptq1_activation *act1, const float scales0[4], const float scales1[4],
-    float *outputs0, float *outputs1, unsigned valid_rows) {
+    float *outputs0, float *outputs1, unsigned valid_rows, const float *weight_scales) {
     static const unsigned powers[4] = {1, 3, 9, 27};
     HVX_Vector acc0[4][2], acc1[4][2];
     int16_t partial0[4][2 * GENIEX_PTQ1_TILE_ROWS] __attribute__((aligned(128)));
@@ -228,9 +228,18 @@ static inline void geniex_ptq1_dot_tile_two(
             sum0 += scales0[b] * partial0[b][row];
             sum1 += scales1[b] * partial1[b][row];
         }
-        const float weight_scale = geniex_ptq1_half_to_float(tile->d[row]);
+        const float weight_scale = weight_scales ? weight_scales[row] : geniex_ptq1_half_to_float(tile->d[row]);
         outputs0[row] += weight_scale * sum0;
         outputs1[row] += weight_scale * sum1;
+    }
+}
+
+static inline void geniex_ptq1_prepare_weight_scales(float *scales, const geniex_ptq1_tile *weights,
+    uint32_t k, unsigned valid_rows) {
+    for (uint32_t block = 0; block < k / GENIEX_PTQ1_BLOCK_K; ++block) {
+        for (unsigned row = 0; row < valid_rows; ++row) {
+            scales[block * GENIEX_PTQ1_TILE_ROWS + row] = geniex_ptq1_half_to_float(weights[block].d[row]);
+        }
     }
 }
 
@@ -314,7 +323,7 @@ static inline void geniex_ptq1_dot_two_rows_flat_q8(uint32_t k, float *outputs0,
         geniex_ptq1_prepare_activation(scratch0, quants0 + block * GENIEX_PTQ1_BLOCK_K);
         geniex_ptq1_prepare_activation(scratch1, quants1 + block * GENIEX_PTQ1_BLOCK_K);
         geniex_ptq1_dot_tile_two(&weights[block], scratch0, scratch1, scales0, scales1,
-            outputs0, outputs1, valid_rows);
+            outputs0, outputs1, valid_rows, NULL);
     }
 }
 
@@ -323,7 +332,8 @@ static inline void geniex_ptq1_dot_pair_two_rows_flat_q8_scaled(uint32_t k,
     const geniex_ptq1_tile *weights0, const geniex_ptq1_tile *weights1,
     const void *flat_q8_0, const void *flat_q8_1, unsigned valid_rows0, unsigned valid_rows1,
     geniex_ptq1_activation *scratch0, geniex_ptq1_activation *scratch1,
-    const float *prepared_scales0, const float *prepared_scales1) {
+    const float *prepared_scales0, const float *prepared_scales1,
+    const float *weight_scales0, const float *weight_scales1) {
     const int8_t *quants0 = (const int8_t *)flat_q8_0;
     const int8_t *quants1 = (const int8_t *)flat_q8_1;
     const uint8_t *scale_bytes0 = (const uint8_t *)flat_q8_0 + k;
@@ -341,11 +351,13 @@ static inline void geniex_ptq1_dot_pair_two_rows_flat_q8_scaled(uint32_t k,
         geniex_ptq1_dot_tile_two(&weights0[block], scratch0, scratch1,
             prepared_scales0 ? prepared_scales0 + 4 * block : scales0,
             prepared_scales1 ? prepared_scales1 + 4 * block : scales1,
-            outputs00, outputs01, valid_rows0);
+            outputs00, outputs01, valid_rows0,
+            weight_scales0 ? weight_scales0 + block * GENIEX_PTQ1_TILE_ROWS : NULL);
         geniex_ptq1_dot_tile_two(&weights1[block], scratch0, scratch1,
             prepared_scales0 ? prepared_scales0 + 4 * block : scales0,
             prepared_scales1 ? prepared_scales1 + 4 * block : scales1,
-            outputs10, outputs11, valid_rows1);
+            outputs10, outputs11, valid_rows1,
+            weight_scales1 ? weight_scales1 + block * GENIEX_PTQ1_TILE_ROWS : NULL);
     }
 }
 
@@ -356,7 +368,7 @@ static inline void geniex_ptq1_dot_pair_two_rows_flat_q8(uint32_t k,
     geniex_ptq1_activation *scratch0, geniex_ptq1_activation *scratch1) {
     geniex_ptq1_dot_pair_two_rows_flat_q8_scaled(k, outputs00, outputs01, outputs10, outputs11,
         weights0, weights1, flat_q8_0, flat_q8_1, valid_rows0, valid_rows1,
-        scratch0, scratch1, NULL, NULL);
+        scratch0, scratch1, NULL, NULL, NULL, NULL);
 }
 #endif
 #endif
