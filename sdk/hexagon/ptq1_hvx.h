@@ -11,6 +11,14 @@
 #include <hvx_hexagon_protos.h>
 
 static inline float geniex_ptq1_half_to_float(uint16_t bits) {
+    const uint32_t exponent = bits & 0x7c00u;
+    if (exponent != 0 && exponent != 0x7c00u) {
+        const uint32_t word = ((uint32_t) (bits & 0x8000u) << 16) |
+                              (((uint32_t) (bits & 0x7fffu) + 0x1c000u) << 13);
+        float value;
+        memcpy(&value, &word, sizeof(value));
+        return value;
+    }
     union {
         uint16_t bits;
         _Float16 value;

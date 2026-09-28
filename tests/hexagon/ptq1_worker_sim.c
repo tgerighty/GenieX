@@ -20,6 +20,9 @@ bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void *data, un
 #ifndef PTQ1_WORKER_N
 #define PTQ1_WORKER_N 81
 #endif
+#ifndef PTQ1_HALF_EXHAUSTIVE
+#define PTQ1_HALF_EXHAUSTIVE 0
+#endif
 enum { K = PTQ1_WORKER_K, M = PTQ1_WORKER_M, N = PTQ1_WORKER_N,
     ROW_STRIDE = N + 16, TILES = (N + 31) / 32, KB = K / GENIEX_PTQ1_BLOCK_K };
 
@@ -34,6 +37,26 @@ static uint8_t queue_storage[4096] __attribute__((aligned(128)));
 static int scalar_trit(uint8_t packed, unsigned power) {
     return (int)((((uint8_t)(packed * power)) * 3u) >> 8) - 1;
 }
+
+#if PTQ1_HALF_EXHAUSTIVE
+static int check_half_conversion(void) {
+    for (unsigned raw = 0; raw <= UINT16_MAX; ++raw) {
+        union { uint16_t bits; _Float16 value; } half = { .bits = (uint16_t) raw };
+        const float expected = (float) half.value;
+        const float actual = geniex_ptq1_half_to_float((uint16_t) raw);
+        uint32_t expected_bits, actual_bits;
+        memcpy(&expected_bits, &expected, sizeof(expected_bits));
+        memcpy(&actual_bits, &actual, sizeof(actual_bits));
+        if (expected_bits != actual_bits) {
+            printf("PTQ1 half mismatch raw=%04x expected=%08x actual=%08x\n", raw,
+                   (unsigned) expected_bits, (unsigned) actual_bits);
+            return 1;
+        }
+    }
+    puts("PTQ1 half exhaustive passed");
+    return 0;
+}
+#endif
 
 static float scalar_dot(unsigned ct, unsigned row, const uint8_t *q8) {
     static const unsigned powers[5] = {1, 3, 9, 27, 81};
@@ -64,6 +87,9 @@ static float scalar_dot(unsigned ct, unsigned row, const uint8_t *q8) {
 }
 
 int main(void) {
+#if PTQ1_HALF_EXHAUSTIVE
+    if (check_half_conversion()) return 8;
+#endif
     uint32_t seed = 7;
     for (unsigned row = 0; row < GENIEX_PTQ1_TILE_ROWS * KB; ++row) {
         for (unsigned k = 0; k < 24; ++k) {
