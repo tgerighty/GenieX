@@ -313,7 +313,13 @@ index 9d38546..c9775b6 100644
      uint32_t tile_row_stride = n_k_tiles_w * tile_size;                                                                           \
      uint32_t tile_row_transfer_size_aligned = n_k_tiles_a * aligned_tile_size;                                                    \
                                                                                                                                    \
-@@ -472,12 +495,19 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
+@@ -472,12 +495,25 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
++    float ptq1_scales[4 * (17408 / GENIEX_PTQ1_BLOCK_K)];                                                                       \
++    const float * ptq1_scale_table = NULL;                                                                                        \
++    if (PAIR_ENABLED && ne10 <= 17408) {                                                                                         \
++        geniex_ptq1_prepare_flat_scales(ptq1_scales, src1_col, ne10);                                                            \
++        ptq1_scale_table = ptq1_scales;                                                                                           \
++    }                                                                                                                             \
      for (uint32_t ct = ct_start; ct < ct_end; ct++) {                                                                             \
          const uint8_t * w_tile = dma_queue_pop(dma_queue).dst;                                                                    \
                                                                                                                                    \
@@ -379,7 +385,7 @@ index 9d38546..c9775b6 100644
  
  #define QUANTIZE_IMPL(name, log_name, kernel_fn, dst_row_size_expr)                                        \
  static void name(unsigned int nth, unsigned int ith, void * data) {                                        \
-@@ -896,17 +936,78 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
+@@ -896,17 +936,83 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
      htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, mmctx->quant_ib_first[ith]);
  }
  
@@ -432,6 +438,10 @@ index 9d38546..c9775b6 100644
 +    geniex_ptq1_dot_pair_flat_q8((n), (s0), (s1), (const geniex_ptq1_tile *) (w0), \
 +        (const geniex_ptq1_tile *) (w1), (y), (rows0), (rows1), \
 +        (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE))
++#define PTQ1_DOT_PAIR_SCALED(n, s0, s1, w0, w1, y, rows0, rows1, sz) \
++    geniex_ptq1_dot_pair_flat_q8_scaled((n), (s0), (s1), (const geniex_ptq1_tile *) (w0), \
++        (const geniex_ptq1_tile *) (w1), (y), (rows0), (rows1), \
++        (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE), ptq1_scale_table)
 +#define PTQ1_DOT_PAIR_2X1_MM(n, s0, s1, w0, w1, y, rows0, rows1, bias) do { \
 +    PTQ1_DOT_PAIR(n, s0, s1, w0, w1, y, rows0, rows1, NULL); \
 +    if (bias) { \
@@ -458,10 +468,11 @@ index 9d38546..c9775b6 100644
 +        PTQ1_DOT_PAIR_2X1_MM(n, s1, (s1) + 32, w0, w1, y1, rows0, rows1, bias1); \
 +    } \
 +} while (0)
-+MATVEC_2D_REPACKED_IMPL(ptq1_flat, HTP_MM_WEIGHT_TILE_SIZE_PTQ1_0, PTQ1_DOT_2X1, 128, PTQ1_DOT_PAIR, 1)
++MATVEC_2D_REPACKED_IMPL(ptq1_flat, HTP_MM_WEIGHT_TILE_SIZE_PTQ1_0, PTQ1_DOT_2X1, 128, PTQ1_DOT_PAIR_SCALED, 1)
 +MATMUL_2D_REPACKED_IMPL(ptq1_flat, HTP_MM_WEIGHT_TILE_SIZE_PTQ1_0, PTQ1_DOT_2X2_MM, PTQ1_DOT_2X1_MM, 128, PTQ1_DOT_PAIR_2X2_MM, PTQ1_DOT_PAIR_2X1_MM, 1)
 +#undef PTQ1_DOT_PAIR_2X2_MM
 +#undef PTQ1_DOT_PAIR_2X1_MM
++#undef PTQ1_DOT_PAIR_SCALED
 +#undef PTQ1_DOT_PAIR
 +#undef PTQ1_DOT_2X2_MM
 +#undef PTQ1_DOT_2X1_MM
