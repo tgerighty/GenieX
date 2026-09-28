@@ -652,3 +652,18 @@ index 58c5496..e89e6e6 100644
              }
          }
      }
+diff --git a/ggml/src/ggml-hexagon/htp/flash-attn-ops.c b/ggml/src/ggml-hexagon/htp/flash-attn-ops.c
+index 8176562..c03fdbf 100644
+--- a/ggml/src/ggml-hexagon/htp/flash-attn-ops.c
++++ b/ggml/src/ggml-hexagon/htp/flash-attn-ops.c
+@@ -2199,8 +2199,8 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
+                             hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_fa_qk_dot_worker, &qk_job));
+-                            hmx_queue_pop(ctx->hmx_queue);
+                         }
+ 
+-                        // Wait for current V DMA and interleave
++                        // Prepare V while HMX computes QK; the buffers are disjoint.
+                         void * curr_v = dma_queue_pop(dma).dst;
+                         fa_phase_v_interleave(&factx, kv_rows, v_src_stride, curr_v, factx.vtcm_v_tiles[0], n_tiles_per_bc, kv_start);
++                        hmx_queue_pop(ctx->hmx_queue);
+ 
