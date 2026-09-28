@@ -183,7 +183,7 @@ static inline void geniex_ptq1_dot_tile(
 
 static inline void geniex_ptq1_dot_tile_two(
     const geniex_ptq1_tile *tile, const geniex_ptq1_activation *act0,
-    const geniex_ptq1_activation *act1, const float scales0[4], const float scales1[4],
+    const geniex_ptq1_activation *act1, const float * restrict scales0, const float * restrict scales1,
     float *outputs0, float *outputs1, unsigned valid_rows, const float *weight_scales) {
     static const unsigned powers[4] = {1, 3, 9, 27};
     HVX_Vector acc0[4][2], acc1[4][2];
