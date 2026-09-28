@@ -150,9 +150,8 @@ static inline void geniex_ptq1_dot_tile(
     }
 #else
     for (unsigned b = 0; b < 4; ++b) {
-        const HVX_Vector lo = Q6_Vh_vadd_VhVh(acc[b][0], Q6_V_vror_VR(acc[b][0], 64));
-        const HVX_Vector hi = Q6_Vh_vadd_VhVh(acc[b][1], Q6_V_vror_VR(acc[b][1], 64));
-        *(HVX_Vector *)partial[b] = Q6_Vh_vadd_VhVh(lo, hi);
+        const HVX_Vector combined = Q6_Vh_vadd_VhVh(acc[b][0], acc[b][1]);
+        *(HVX_Vector *)partial[b] = Q6_Vh_vadd_VhVh(combined, Q6_V_vror_VR(combined, 64));
     }
 #endif
     for (unsigned row = 0; row < GENIEX_PTQ1_TILE_ROWS; ++row) {
@@ -208,12 +207,10 @@ static inline void geniex_ptq1_dot_tile_two(
         acc1[3][0] = Q6_Vh_vmpyiacc_VhVhVh(acc1[3][0], trit, act1->qh[n].lo);
     }
     for (unsigned b = 0; b < 4; ++b) {
-        const HVX_Vector lo0 = Q6_Vh_vadd_VhVh(acc0[b][0], Q6_V_vror_VR(acc0[b][0], 64));
-        const HVX_Vector hi0 = Q6_Vh_vadd_VhVh(acc0[b][1], Q6_V_vror_VR(acc0[b][1], 64));
-        const HVX_Vector lo1 = Q6_Vh_vadd_VhVh(acc1[b][0], Q6_V_vror_VR(acc1[b][0], 64));
-        const HVX_Vector hi1 = Q6_Vh_vadd_VhVh(acc1[b][1], Q6_V_vror_VR(acc1[b][1], 64));
-        *(HVX_Vector *)partial0[b] = Q6_Vh_vadd_VhVh(lo0, hi0);
-        *(HVX_Vector *)partial1[b] = Q6_Vh_vadd_VhVh(lo1, hi1);
+        const HVX_Vector combined0 = Q6_Vh_vadd_VhVh(acc0[b][0], acc0[b][1]);
+        const HVX_Vector combined1 = Q6_Vh_vadd_VhVh(acc1[b][0], acc1[b][1]);
+        *(HVX_Vector *)partial0[b] = Q6_Vh_vadd_VhVh(combined0, Q6_V_vror_VR(combined0, 64));
+        *(HVX_Vector *)partial1[b] = Q6_Vh_vadd_VhVh(combined1, Q6_V_vror_VR(combined1, 64));
     }
     for (unsigned row = 0; row < valid_rows; ++row) {
         float sum0 = 0.0f, sum1 = 0.0f;
