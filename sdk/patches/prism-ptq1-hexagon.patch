@@ -385,7 +385,7 @@ index 9d38546..c9775b6 100644
  
  #define QUANTIZE_IMPL(name, log_name, kernel_fn, dst_row_size_expr)                                        \
  static void name(unsigned int nth, unsigned int ith, void * data) {                                        \
-@@ -896,17 +936,83 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
+@@ -896,17 +936,88 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
      htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, mmctx->quant_ib_first[ith]);
  }
  
@@ -438,10 +438,15 @@ index 9d38546..c9775b6 100644
 +    geniex_ptq1_dot_pair_flat_q8((n), (s0), (s1), (const geniex_ptq1_tile *) (w0), \
 +        (const geniex_ptq1_tile *) (w1), (y), (rows0), (rows1), \
 +        (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE))
-+#define PTQ1_DOT_PAIR_SCALED(n, s0, s1, w0, w1, y, rows0, rows1, sz) \
-+    geniex_ptq1_dot_pair_flat_q8_scaled((n), (s0), (s1), (const geniex_ptq1_tile *) (w0), \
-+        (const geniex_ptq1_tile *) (w1), (y), (rows0), (rows1), \
-+        (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE), ptq1_scale_table)
++#define PTQ1_DOT_PAIR_SCALED(n, s0, s1, w0, w1, y, rows0, rows1, sz) do { \
++    if (ptq1_scale_table) { \
++        geniex_ptq1_dot_pair_flat_q8_scaled((n), (s0), (s1), (const geniex_ptq1_tile *) (w0), \
++            (const geniex_ptq1_tile *) (w1), (y), (rows0), (rows1), \
++            (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE), ptq1_scale_table); \
++    } else { \
++        PTQ1_DOT_PAIR(n, s0, s1, w0, w1, y, rows0, rows1, sz); \
++    } \
++} while (0)
 +#define PTQ1_DOT_PAIR_2X1_MM(n, s0, s1, w0, w1, y, rows0, rows1, bias) do { \
 +    PTQ1_DOT_PAIR(n, s0, s1, w0, w1, y, rows0, rows1, NULL); \
 +    if (bias) { \
