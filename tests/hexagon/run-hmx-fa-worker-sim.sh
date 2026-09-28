@@ -22,7 +22,8 @@ flags=(-mcpu=v75 -mv75 -mhvx=v75 -mhmx -O2 -fpic -ffunction-sections -fdata-sect
 "$tools/hexagon-clang" "${includes[@]}" "${flags[@]}" \
     -c "$prism_htp/hmx-queue.c" -o "$build_dir/hmx.o"
 "$tools/hexagon-clang" -mcpu=v75 -mv75 -mhvx=v75 -mhmx -Wl,--gc-sections \
-    "$build_dir/worker.o" "$build_dir/dma.o" "$build_dir/hmx.o" -lm -o "$build_dir/worker.elf"
+    "$build_dir/worker.o" "$build_dir/dma.o" "$build_dir/hmx.o" \
+    -L"$sdk/rtos/qurt/computev75/lib" -lqurt -lm -o "$build_dir/worker.elf"
 if ! output=$("$tools/hexagon-sim" --march v75na_1 -r "$build_dir/worker.elf" 2>&1); then
     printf '%s\n' "$output" >&2
     exit 1
