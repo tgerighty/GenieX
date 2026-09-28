@@ -37,7 +37,7 @@ if [[ ${2:-} == --worker ]]; then
     includes+=(-I"$prism_htp/.." -I"$prism_htp/../..")
     "$tools/hexagon-clang" "${includes[@]}" "${flags[@]}" -fpic -ffunction-sections -fdata-sections \
         -DPTQ1_WORKER_K="$worker_k" -DPTQ1_WORKER_M="$worker_m" -DPTQ1_WORKER_N="$worker_n" \
-        -DPTQ1_WORKER_REPEATS="$worker_repeats" \
+        -DPTQ1_WORKER_REPEATS="$worker_repeats" -DPTQ1_HALF_EXHAUSTIVE="${PTQ1_HALF_EXHAUSTIVE:-0}" \
         -c "$here/ptq1_worker_sim.c" -o "$build_dir/worker.o"
     "$tools/hexagon-clang" "${flags[@]}" -Wl,--gc-sections \
         "$build_dir/worker.o" "$build_dir/queue.o" -lm -o "$build_dir/worker.elf"
@@ -46,6 +46,7 @@ if [[ ${2:-} == --worker ]]; then
         exit 1
     fi
     grep -F "PTQ1 worker K=$worker_k M=$worker_m repeats=$worker_repeats checksum " <<< "$output"
+    if [[ ${PTQ1_HALF_EXHAUSTIVE:-0} == 1 ]]; then grep -Fx 'PTQ1 half exhaustive passed' <<< "$output"; fi
     grep -F 'Total: Insns=' <<< "$output"
     exit 0
 fi
