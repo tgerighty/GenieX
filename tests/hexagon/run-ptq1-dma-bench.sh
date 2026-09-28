@@ -8,6 +8,10 @@ prism_htp=$prism_htp/ggml/src/ggml-hexagon/htp
 if [[ ${2:-} == --worker && -z ${PTQ1_WORKER_K:-} ]]; then
     PTQ1_WORKER_K=256 "$0" "${1}" --worker
     PTQ1_WORKER_K=5120 "$0" "${1}" --worker
+    if [[ -z ${PTQ1_WORKER_M:-} && -z ${PTQ1_WORKER_N:-} ]]; then
+        PTQ1_WORKER_K=5120 PTQ1_WORKER_M=1 PTQ1_WORKER_N=273 "$0" "${1}" --worker
+        PTQ1_WORKER_K=17408 PTQ1_WORKER_M=1 PTQ1_WORKER_N=145 "$0" "${1}" --worker
+    fi
     exit 0
 fi
 sdk=${HEXAGON_SDK_ROOT:-/opt/hexagon/6.6.0.0}
@@ -26,10 +30,12 @@ flags=(-mcpu=v75 -mv75 -mhvx=v75 -mhmx -O2)
 if [[ ${2:-} == --worker ]]; then
     worker_k=${PTQ1_WORKER_K:-256}
     worker_m=${PTQ1_WORKER_M:-3}
+    worker_n=${PTQ1_WORKER_N:-81}
     worker_repeats=${PTQ1_WORKER_REPEATS:-1}
     includes+=(-I"$prism_htp/.." -I"$prism_htp/../..")
     "$tools/hexagon-clang" "${includes[@]}" "${flags[@]}" -fpic -ffunction-sections -fdata-sections \
-        -DPTQ1_WORKER_K="$worker_k" -DPTQ1_WORKER_M="$worker_m" -DPTQ1_WORKER_REPEATS="$worker_repeats" \
+        -DPTQ1_WORKER_K="$worker_k" -DPTQ1_WORKER_M="$worker_m" -DPTQ1_WORKER_N="$worker_n" \
+        -DPTQ1_WORKER_REPEATS="$worker_repeats" \
         -c "$here/ptq1_worker_sim.c" -o "$build_dir/worker.o"
     "$tools/hexagon-clang" "${flags[@]}" -Wl,--gc-sections \
         "$build_dir/worker.o" "$build_dir/queue.o" -lm -o "$build_dir/worker.elf"

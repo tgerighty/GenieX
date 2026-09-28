@@ -17,7 +17,11 @@ bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void *data, un
 #ifndef PTQ1_WORKER_REPEATS
 #define PTQ1_WORKER_REPEATS 1
 #endif
-enum { K = PTQ1_WORKER_K, M = PTQ1_WORKER_M, N = 81, ROW_STRIDE = N + 16, TILES = 3, KB = K / GENIEX_PTQ1_BLOCK_K };
+#ifndef PTQ1_WORKER_N
+#define PTQ1_WORKER_N 81
+#endif
+enum { K = PTQ1_WORKER_K, M = PTQ1_WORKER_M, N = PTQ1_WORKER_N,
+    ROW_STRIDE = N + 16, TILES = (N + 31) / 32, KB = K / GENIEX_PTQ1_BLOCK_K };
 
 static geniex_ptq1_tile weights[TILES][KB] __attribute__((aligned(128)));
 static geniex_ptq1_block blocks[GENIEX_PTQ1_TILE_ROWS * KB];
@@ -73,9 +77,10 @@ int main(void) {
         blocks[row].d = 0x3800 + (row % 3) * 0x400;
     }
     for (unsigned ct = 0; ct < TILES; ++ct) {
+        const unsigned valid_rows = ct + 1 == TILES ? N - ct * GENIEX_PTQ1_TILE_ROWS : GENIEX_PTQ1_TILE_ROWS;
         for (unsigned kb = 0; kb < KB; ++kb) {
-            geniex_ptq1_pack_tile(&weights[ct][kb], blocks, KB, kb, ct + 1 == TILES ? 17 : 32);
-            weights[ct][kb].qs[0][ct] ^= ct + kb + 1;
+            geniex_ptq1_pack_tile(&weights[ct][kb], blocks, KB, kb, valid_rows);
+            weights[ct][kb].qs[0][ct % valid_rows] ^= ct + kb + 1;
         }
     }
     for (unsigned ir = 0; ir < M; ++ir) {
