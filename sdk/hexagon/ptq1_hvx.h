@@ -221,16 +221,29 @@ static inline void geniex_ptq1_dot_tile_two(
         *(HVX_Vector *)partial0[b] = Q6_Vh_vadd_VhVh(combined0, Q6_V_vror_VR(combined0, 64));
         *(HVX_Vector *)partial1[b] = Q6_Vh_vadd_VhVh(combined1, Q6_V_vror_VR(combined1, 64));
     }
+    if (weight_scales) {
 #pragma clang loop unroll_count(8)
-    for (unsigned row = 0; row < valid_rows; ++row) {
-        float sum0 = 0.0f, sum1 = 0.0f;
-        for (unsigned b = 0; b < 4; ++b) {
-            sum0 += scales0[b] * partial0[b][row];
-            sum1 += scales1[b] * partial1[b][row];
+        for (unsigned row = 0; row < valid_rows; ++row) {
+            float sum0 = 0.0f, sum1 = 0.0f;
+            for (unsigned b = 0; b < 4; ++b) {
+                sum0 += scales0[b] * partial0[b][row];
+                sum1 += scales1[b] * partial1[b][row];
+            }
+            outputs0[row] += weight_scales[row] * sum0;
+            outputs1[row] += weight_scales[row] * sum1;
         }
-        const float weight_scale = weight_scales ? weight_scales[row] : geniex_ptq1_half_to_float(tile->d[row]);
-        outputs0[row] += weight_scale * sum0;
-        outputs1[row] += weight_scale * sum1;
+    } else {
+#pragma clang loop unroll_count(8)
+        for (unsigned row = 0; row < valid_rows; ++row) {
+            float sum0 = 0.0f, sum1 = 0.0f;
+            for (unsigned b = 0; b < 4; ++b) {
+                sum0 += scales0[b] * partial0[b][row];
+                sum1 += scales1[b] * partial1[b][row];
+            }
+            const float weight_scale = geniex_ptq1_half_to_float(tile->d[row]);
+            outputs0[row] += weight_scale * sum0;
+            outputs1[row] += weight_scale * sum1;
+        }
     }
 }
 
