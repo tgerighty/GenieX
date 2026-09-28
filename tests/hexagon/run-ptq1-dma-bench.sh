@@ -10,6 +10,7 @@ if [[ ${2:-} == --worker && -z ${PTQ1_WORKER_K:-} ]]; then
     PTQ1_WORKER_K=5120 "$0" "${1}" --worker
     if [[ -z ${PTQ1_WORKER_M:-} && -z ${PTQ1_WORKER_N:-} ]]; then
         PTQ1_WORKER_K=5120 PTQ1_WORKER_M=3 PTQ1_WORKER_N=273 "$0" "${1}" --worker
+        PTQ1_WORKER_K=5120 PTQ1_WORKER_M=4 PTQ1_WORKER_N=273 "$0" "${1}" --worker
         PTQ1_WORKER_K=5120 PTQ1_WORKER_M=8 PTQ1_WORKER_N=273 "$0" "${1}" --worker
         PTQ1_WORKER_K=5120 PTQ1_WORKER_M=1 PTQ1_WORKER_N=273 "$0" "${1}" --worker
         PTQ1_WORKER_K=17408 PTQ1_WORKER_M=1 PTQ1_WORKER_N=145 "$0" "${1}" --worker
