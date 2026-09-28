@@ -307,8 +307,10 @@ static inline void geniex_ptq1_dot_pair_flat_q8_scaled(uint32_t k, float *output
         if (!prepared_scales) geniex_ptq1_flat_scales(scales, scale_bytes, block);
         geniex_ptq1_prepare_activation(scratch, quants + block * GENIEX_PTQ1_BLOCK_K);
         geniex_ptq1_dot_tile(&weights0[block], scratch, prepared_scales ? prepared_scales + 4 * block : scales, partial);
+#pragma clang loop unroll_count(4)
         for (unsigned row = 0; row < valid_rows0; ++row) outputs0[row] += partial[row];
         geniex_ptq1_dot_tile(&weights1[block], scratch, prepared_scales ? prepared_scales + 4 * block : scales, partial);
+#pragma clang loop unroll_count(4)
         for (unsigned row = 0; row < valid_rows1; ++row) outputs1[row] += partial[row];
     }
 }
