@@ -250,6 +250,7 @@ static inline void geniex_ptq1_dot_tile_two(
 static inline void geniex_ptq1_prepare_weight_scales(float *scales, const geniex_ptq1_tile *weights,
     uint32_t k, unsigned valid_rows) {
     for (uint32_t block = 0; block < k / GENIEX_PTQ1_BLOCK_K; ++block) {
+#pragma clang loop unroll_count(8)
         for (unsigned row = 0; row < valid_rows; ++row) {
             scales[block * GENIEX_PTQ1_TILE_ROWS + row] = geniex_ptq1_half_to_float(weights[block].d[row]);
         }
