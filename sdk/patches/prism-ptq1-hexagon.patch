@@ -209,7 +209,7 @@ index a138f06..f444115 100644
      // types used internally for repack, dyn.quant, etc
      HTP_TYPE_Q4_0_TILED = 200,
 diff --git a/ggml/src/ggml-hexagon/htp/matmul-ops.c b/ggml/src/ggml-hexagon/htp/matmul-ops.c
-index 9d38546..c9775b6 100644
+index 9d38546..300f1d3 100644
 --- a/ggml/src/ggml-hexagon/htp/matmul-ops.c
 +++ b/ggml/src/ggml-hexagon/htp/matmul-ops.c
 @@ -23,6 +23,10 @@
@@ -243,8 +243,20 @@ index 9d38546..c9775b6 100644
      uint32_t tile_row_stride = n_k_tiles_w * tile_size;                                                                           \
      uint32_t tile_row_transfer_size_aligned = n_k_tiles_a * aligned_tile_size;                                                    \
                                                                                                                                    \
-@@ -356,9 +360,11 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
+@@ -354,11 +358,23 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
+         return;                                                                                                                   \
+     }                                                                                                                             \
                                                                                                                                    \
++    enum { ptq1_scales_per_row = 4 * (5120 / GENIEX_PTQ1_BLOCK_K) };                                                              \
++    float ptq1_prefill_scales[4 * ptq1_scales_per_row];                                                                            \
++    const float * ptq1_prefill_scale_table = NULL;                                                                                \
++    if (PAIR_ENABLED && src1_nrows >= 2 && src1_nrows <= 4 && ne10 == 5120 && ct_end - ct_start >= 4) {                         \
++        for (uint32_t row = 0; row < (src1_nrows & ~1u); ++row) {                                                                 \
++            geniex_ptq1_prepare_flat_scales(ptq1_prefill_scales + row * ptq1_scales_per_row, src1_data + row * src1_stride, ne10); \
++        }                                                                                                                         \
++        ptq1_prefill_scale_table = ptq1_prefill_scales;                                                                           \
++    }                                                                                                                             \
++                                                                                                                                  \
      for (uint32_t ct = ct_start; ct < ct_end; ct++) {                                                                             \
          const uint8_t * w_tile = dma_queue_pop(dma_queue).dst;                                                                    \
 +        const uint8_t * w_tile_next = PAIR_ENABLED && ct + 1 < ct_end ? dma_queue_pop(dma_queue).dst : NULL;                        \
@@ -255,7 +267,7 @@ index 9d38546..c9775b6 100644
                                                                                                                                    \
          htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                    \
          uint32_t ir1 = 0;                                                                                                         \
-@@ -379,7 +385,12 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
+@@ -379,7 +395,12 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                  src2_ptr0 = &src2_row0[ct * 32];                                                                                  \
                  src2_ptr1 = &src2_row1[ct * 32];                                                                                  \
              }                                                                                                                     \
@@ -269,7 +281,7 @@ index 9d38546..c9775b6 100644
          }                                                                                                                         \
                                                                                                                                    \
          for (; ir1 < src1_nrows; ++ir1) {                                                                                         \
-@@ -392,7 +403,11 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
+@@ -392,7 +413,11 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                  const float * restrict src2_row = (const float *) ((const uint8_t *) src2->data + (ir1 * src2_stride));           \
                  src2_ptr = &src2_row[ct * 32];                                                                                    \
              }                                                                                                                     \
@@ -282,7 +294,7 @@ index 9d38546..c9775b6 100644
          }                                                                                                                         \
          htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                     \
                                                                                                                                    \
-@@ -401,10 +416,18 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
+@@ -401,10 +426,18 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                             aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                                                 \
              push_ct++;                                                                                                            \
          }                                                                                                                         \
@@ -302,7 +314,7 @@ index 9d38546..c9775b6 100644
  static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void * data) {                                        \
      htp_matmul_preamble;                                                                                                          \
                                                                                                                                    \
-@@ -437,8 +460,8 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
+@@ -437,8 +470,8 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
      const uint32_t tile_size = TILE_SIZE;                                                                                         \
      const uint32_t aligned_tile_size = hex_align_up(tile_size, 128);                                                              \
                                                                                                                                    \
@@ -313,7 +325,10 @@ index 9d38546..c9775b6 100644
      uint32_t tile_row_stride = n_k_tiles_w * tile_size;                                                                           \
      uint32_t tile_row_transfer_size_aligned = n_k_tiles_a * aligned_tile_size;                                                    \
                                                                                                                                    \
-@@ -472,12 +495,25 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
+@@ -469,15 +502,28 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
+         return;                                                                                                                   \
+     }                                                                                                                             \
+                                                                                                                                   \
 +    float ptq1_scales[4 * (17408 / GENIEX_PTQ1_BLOCK_K)];                                                                       \
 +    const float * ptq1_scale_table = NULL;                                                                                        \
 +    if (PAIR_ENABLED && ct_end - ct_start >= 4 && ne10 <= 17408) {                                                                \
@@ -340,7 +355,7 @@ index 9d38546..c9775b6 100644
          htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                    \
                                                                                                                                    \
          if (push_ct < ct_end) {                                                                                                   \
-@@ -485,6 +515,14 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
+@@ -485,6 +531,14 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                             aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                                                 \
              push_ct++;                                                                                                            \
          }                                                                                                                         \
@@ -355,7 +370,7 @@ index 9d38546..c9775b6 100644
      }                                                                                                                             \
                                                                                                                                    \
      int copy_cnt = (int)MIN(src0_end_row, ne0) - (int)src0_start_row;                                                             \
-@@ -796,17 +834,19 @@ static void hvx_mm_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith,
+@@ -796,17 +850,19 @@ static void hvx_mm_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith,
      }                                                                                                                             \
  }
  
@@ -385,7 +400,7 @@ index 9d38546..c9775b6 100644
  
  #define QUANTIZE_IMPL(name, log_name, kernel_fn, dst_row_size_expr)                                        \
  static void name(unsigned int nth, unsigned int ith, void * data) {                                        \
-@@ -896,17 +936,88 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
+@@ -896,17 +952,90 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
      htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, mmctx->quant_ib_first[ith]);
  }
  
@@ -456,10 +471,12 @@ index 9d38546..c9775b6 100644
 +} while (0)
 +#define PTQ1_DOT_PAIR_2X2_MM(n, s0, s1, w0, w1, y0, y1, rows0, rows1, bias0, bias1) do { \
 +    if ((size_t) (n) * sizeof(float) >= HTP_MM_PTQ1_ACT_SCRATCH_SIZE) { \
-+        geniex_ptq1_dot_pair_two_rows_flat_q8((n), (s0), (s1), (s0) + 32, (s1) + 32, \
++        geniex_ptq1_dot_pair_two_rows_flat_q8_scaled((n), (s0), (s1), (s0) + 32, (s1) + 32, \
 +            (const geniex_ptq1_tile *) (w0), (const geniex_ptq1_tile *) (w1), \
 +            (y0), (y1), (rows0), (rows1), (geniex_ptq1_activation *) vtcm_dst_ptr, \
-+            (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE)); \
++            (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE), \
++            ptq1_prefill_scale_table ? ptq1_prefill_scale_table + ir1 * ptq1_scales_per_row : NULL, \
++            ptq1_prefill_scale_table ? ptq1_prefill_scale_table + (ir1 + 1) * ptq1_scales_per_row : NULL); \
 +        if (bias0) { \
 +            for (int ptq1_row = 0; ptq1_row < (rows0); ++ptq1_row) (s0)[ptq1_row] += (bias0)[ptq1_row]; \
 +            for (int ptq1_row = 0; ptq1_row < (rows1); ++ptq1_row) (s0)[32 + ptq1_row] += (bias0)[32 + ptq1_row]; \
@@ -485,7 +502,7 @@ index 9d38546..c9775b6 100644
  
  
  MATMUL_QKV_2D_REPACKED_IMPL(q4_0,       576,  tiled_vec_dot_q4_0_32x2,  tiled_vec_dot_q4_0_32x1)
-@@ -1361,7 +1462,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
+@@ -1361,7 +1490,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
  
      bool is_repacked = (src0->type == HTP_TYPE_Q4_0 || src0->type == HTP_TYPE_Q4_1 ||
                          src0->type == HTP_TYPE_Q8_0 || src0->type == HTP_TYPE_IQ4_NL ||
@@ -494,7 +511,7 @@ index 9d38546..c9775b6 100644
  
      // Compute src0_nrows_per_thread
      mmctx->src0_nrows_per_thread  = (src0_nrows + octx->n_threads - 1) / octx->n_threads;
-@@ -1389,6 +1490,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
+@@ -1389,6 +1518,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                  case HTP_TYPE_Q8_0:   matmul_job_func = hvx_mm_2d_repacked_q8_0;   break;
                  case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mm_2d_repacked_iq4nl;  break;
                  case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mm_2d_repacked_mxfp4;  break;
@@ -502,7 +519,7 @@ index 9d38546..c9775b6 100644
                  default:              return HTP_STATUS_NO_SUPPORT;
              }
          } else {
-@@ -1402,6 +1504,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
+@@ -1402,6 +1532,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                  case HTP_TYPE_Q8_0:   matmul_job_func = hvx_mv_2d_repacked_q8_0;   break;
                  case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mv_2d_repacked_iq4nl;  break;
                  case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mv_2d_repacked_mxfp4;  break;
@@ -510,7 +527,7 @@ index 9d38546..c9775b6 100644
                  default:              return HTP_STATUS_NO_SUPPORT;
              }
          } else {
-@@ -1481,6 +1584,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
+@@ -1481,6 +1612,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                      case HTP_TYPE_Q8_0:   matmul_job_func = hvx_mm_2d_repacked_q8_0_flat;   break;
                      case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mm_2d_repacked_iq4nl_flat;  break;
                      case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mm_2d_repacked_mxfp4_flat;  break;
@@ -518,7 +535,7 @@ index 9d38546..c9775b6 100644
                      default:              return HTP_STATUS_NO_SUPPORT;
                  }
              } else {
-@@ -1490,6 +1594,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
+@@ -1490,6 +1622,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                      case HTP_TYPE_Q8_0:   matmul_job_func = hvx_mv_2d_repacked_q8_0_flat;   break;
                      case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mv_2d_repacked_iq4nl_flat;  break;
                      case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mv_2d_repacked_mxfp4_flat;  break;
