@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 # Run the production GDN worker with real DMA on the v75 simulator.
-# Usage: run-gdn-worker-sim.sh /path/to/prism
+# Usage: GDN_EXPECT_SCALAR4=0|1 run-gdn-worker-sim.sh /path/to/prism
 set -euo pipefail
 
 prism_htp=${1:?pass the Prism llama.cpp checkout path}/ggml/src/ggml-hexagon/htp
+case ${GDN_EXPECT_SCALAR4:?set 0 for baseline or 1 for candidate} in
+    0) expected_calls=2 ;;
+    1) expected_calls=1 ;;
+    *) printf 'GDN_EXPECT_SCALAR4 must be 0 or 1\n' >&2; exit 2 ;;
+esac
+actual_calls=$(grep -Fc 'gdn_mul_scalar_dot8_f32(row0' "$prism_htp/gated-delta-net-ops.c" || true)
+if [[ "$actual_calls" != "$expected_calls" ]]; then
+    printf 'GDN source patch state mismatch: expected %s scalar8 calls, found %s\n' "$expected_calls" "$actual_calls" >&2
+    exit 2
+fi
 sdk=${HEXAGON_SDK_ROOT:-/opt/hexagon/6.6.0.0}
 hex_tools=${HEXAGON_TOOLS_ROOT:-$sdk/tools/HEXAGON_Tools/19.0.07}/Tools/bin
 here=${GDN_BENCH_SOURCE_DIR:-$(cd "$(dirname "$0")" && pwd)}
