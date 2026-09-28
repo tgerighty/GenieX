@@ -77,10 +77,10 @@ int main(void) {
         blocks[row].d = 0x3800 + (row % 3) * 0x400;
     }
     for (unsigned ct = 0; ct < TILES; ++ct) {
+        const unsigned valid_rows = ct + 1 == TILES ? N - ct * GENIEX_PTQ1_TILE_ROWS : GENIEX_PTQ1_TILE_ROWS;
         for (unsigned kb = 0; kb < KB; ++kb) {
-            geniex_ptq1_pack_tile(&weights[ct][kb], blocks, KB, kb,
-                ct + 1 == TILES ? N - ct * GENIEX_PTQ1_TILE_ROWS : GENIEX_PTQ1_TILE_ROWS);
-            weights[ct][kb].qs[0][ct % GENIEX_PTQ1_TILE_ROWS] ^= ct + kb + 1;
+            geniex_ptq1_pack_tile(&weights[ct][kb], blocks, KB, kb, valid_rows);
+            weights[ct][kb].qs[0][ct % valid_rows] ^= ct + kb + 1;
         }
     }
     for (unsigned ir = 0; ir < M; ++ir) {
