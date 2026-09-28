@@ -44,6 +44,8 @@ if ! output=$("$tools/hexagon-sim" --march v75na_1 --simulated_returnval \
     printf '%s\n' "$output" >&2
     pc=$(sed -n 's/.* PC=\([0-9A-Fa-f]*\) VADDR=.*/\1/p' <<< "$output" | head -n 1)
     if [[ -n $pc ]]; then "$tools/hexagon-addr2line" -f -C -e "$build_dir/worker.elf" "0x$pc" >&2; fi
+    elr=$(sed -n 's/^ELR[[:space:]]*0x\([0-9A-Fa-f]*\).*/\1/p' <<< "$output" | head -n 1)
+    if [[ -n $elr ]]; then "$tools/hexagon-addr2line" -f -C -e "$build_dir/worker.elf" "0x$elr" >&2; fi
     exit 1
 fi
 grep -F "HMX FA worker L=${HMX_FA_KV_LEN:-64} Q=${HMX_FA_Q_LEN:-1} repeats=${HMX_FA_REPEATS:-1}" <<< "$output"
