@@ -67,6 +67,17 @@ static void check_prefill_scratch(void) {
     assert(layout.dst_bytes / threads == k * sizeof(float) + HTP_MM_PTQ1_ACT_SCRATCH_SIZE);
     assert(layout.total_bytes <= 8 * 1024 * 1024);
 
+    const uint32_t prefill_rows[] = {16, 512, 513};
+    for (size_t i = 0; i < sizeof(prefill_rows) / sizeof(prefill_rows[0]); ++i) {
+        const uint32_t rows = prefill_rows[i];
+        htp_mm_hvx_vtcm_layout_build(&layout, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT,
+            HTP_TYPE_PTQ1_0, k, rows, threads, 256 * sizeof(float), 1120, k * sizeof(float), 0, 2,
+            false, false, false);
+        const size_t table_bytes = rows <= 512 ? (size_t) rows * 192 * sizeof(float) : 0;
+        assert(layout.dst_bytes / threads == k * sizeof(float) + table_bytes + HTP_MM_PTQ1_ACT_SCRATCH_SIZE);
+        assert(layout.total_bytes <= 8 * 1024 * 1024);
+    }
+
     htp_mm_hvx_vtcm_layout_build(&layout, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT,
         HTP_TYPE_PTQ1_0, 17408, 310, threads, 5120 * sizeof(float), 17408 / 128 * 28,
         17408 * sizeof(float), 0, 2, false, false, false);

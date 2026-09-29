@@ -243,7 +243,7 @@ index 9d38546..300f1d3 100644
      uint32_t tile_row_stride = n_k_tiles_w * tile_size;                                                                           \
      uint32_t tile_row_transfer_size_aligned = n_k_tiles_a * aligned_tile_size;                                                    \
                                                                                                                                    \
-@@ -354,11 +358,25 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
+@@ -354,11 +358,32 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
          return;                                                                                                                   \
      }                                                                                                                             \
                                                                                                                                    \
@@ -257,6 +257,13 @@ index 9d38546..300f1d3 100644
 +            geniex_ptq1_prepare_flat_scales(ptq1_prefill_scales + row * ptq1_scales_per_row, src1_data + row * src1_stride, ne10); \
 +        }                                                                                                                         \
 +        ptq1_prefill_scale_table = ptq1_prefill_scales;                                                                           \
++    }                                                                                                                             \
++    if (PAIR_ENABLED && ne10 == 5120 && src1_nrows > 8 && src1_nrows <= 512 && ct_end - ct_start >= 4) {                         \
++        float * scales = (float *) (vtcm_dst_ptr + htp_mm_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float)));         \
++        for (uint32_t row = 0; row < src1_nrows; ++row) {                                                                         \
++            geniex_ptq1_prepare_flat_scales(scales + row * ptq1_scales_per_row, src1_data + row * src1_stride, ne10);           \
++        }                                                                                                                         \
++        ptq1_prefill_scale_table = scales;                                                                                        \
 +    }                                                                                                                             \
 +                                                                                                                                  \
      for (uint32_t ct = ct_start; ct < ct_end; ct++) {                                                                             \
@@ -631,7 +638,7 @@ index 6c39366..d6502fd 100644
                      uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
                      size_t repacked_vtcm_size = htp_mm_round_up(n_prefetch * tile_row_size, 256);
                      src0_sz = repacked_vtcm_size * n_threads;
-@@ -604,9 +613,15 @@ static inline void htp_mm_hvx_vtcm_layout_build(
+@@ -604,9 +613,18 @@ static inline void htp_mm_hvx_vtcm_layout_build(
  
                  size_t quant_scratch_size_per_thread = htp_mm_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float));
                  size_t dst_size_per_thread = dst_nrows > 0 ? htp_mm_round_up(dst_row_size, 128) : 0;
@@ -642,6 +649,9 @@ index 6c39366..d6502fd 100644
                      dst_size_per_thread = quant_scratch_size_per_thread;
                  }
 +                if (wtype == HTP_TYPE_PTQ1_0) {
++                    if (ne10 == 5120 && src1_nrows > 8 && src1_nrows <= 512) {
++                        dst_size_per_thread += (size_t) src1_nrows * 192 * sizeof(float);
++                    }
 +                    dst_size_per_thread += HTP_MM_PTQ1_ACT_SCRATCH_SIZE;
 +                }
                  dst_sz = dst_size_per_thread * n_threads;
