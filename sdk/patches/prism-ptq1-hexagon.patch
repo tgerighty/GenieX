@@ -409,7 +409,7 @@ index 9d38546..300f1d3 100644
  
  #define QUANTIZE_IMPL(name, log_name, kernel_fn, dst_row_size_expr)                                        \
  static void name(unsigned int nth, unsigned int ith, void * data) {                                        \
-@@ -896,17 +954,101 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
+@@ -896,17 +954,107 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
      htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, mmctx->quant_ib_first[ith]);
  }
  
@@ -472,7 +472,13 @@ index 9d38546..300f1d3 100644
 +    } \
 +} while (0)
 +#define PTQ1_DOT_PAIR_2X1_MM(n, s0, s1, w0, w1, y, rows0, rows1, bias) do { \
-+    geniex_ptq1_dot_pair_flat_q8_scaled((n), (s0), (s1), (const geniex_ptq1_tile *) (w0), (const geniex_ptq1_tile *) (w1), (y), (rows0), (rows1), (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE), ptq1_prefill_scale_table ? ptq1_prefill_scale_table + ir1 * ptq1_scales_per_row : NULL); \
++    const float *ptq1_weight_scales = NULL; \
++    if (((n) == 5120 || (n) == 6144 || (n) == 17408) && src1_nrows >= 4 && ct_end - ct_start >= 4 && \
++        (size_t) (n) * sizeof(float) >= HTP_MM_PTQ1_ACT_SCRATCH_SIZE && \
++        mmctx->vtcm_dst_size_per_thread >= 2 * HTP_MM_PTQ1_ACT_SCRATCH_SIZE + 2 * (n)) { \
++        ptq1_weight_scales = (const float *) (vtcm_dst_ptr + HTP_MM_PTQ1_ACT_SCRATCH_SIZE); \
++    } \
++    geniex_ptq1_dot_pair_flat_q8_cached((n), (s0), (s1), (const geniex_ptq1_tile *) (w0), (const geniex_ptq1_tile *) (w1), (y), (rows0), (rows1), (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE), ptq1_prefill_scale_table ? ptq1_prefill_scale_table + ir1 * ptq1_scales_per_row : NULL, ptq1_weight_scales, ptq1_weight_scales ? ptq1_weight_scales + (n) / 4 : NULL); \
 +    if (bias) { \
 +        for (int ptq1_row = 0; ptq1_row < (rows0); ++ptq1_row) (s0)[ptq1_row] += (bias)[ptq1_row]; \
 +        for (int ptq1_row = 0; ptq1_row < (rows1); ++ptq1_row) (s1)[ptq1_row] += (bias)[32 + ptq1_row]; \
@@ -485,8 +491,8 @@ index 9d38546..300f1d3 100644
 +            mmctx->vtcm_dst_size_per_thread >= 2 * HTP_MM_PTQ1_ACT_SCRATCH_SIZE + 2 * (n)) { \
 +            float *cache = (float *) (vtcm_dst_ptr + HTP_MM_PTQ1_ACT_SCRATCH_SIZE); \
 +            if (ir1 == 0) { \
-+                geniex_ptq1_prepare_weight_scales(cache, (const geniex_ptq1_tile *) (w0), (n), (rows0)); \
-+                geniex_ptq1_prepare_weight_scales(cache + (n) / 4, (const geniex_ptq1_tile *) (w1), (n), (rows1)); \
++                geniex_ptq1_prepare_weight_scales(cache, (const geniex_ptq1_tile *) (w0), (n), GENIEX_PTQ1_TILE_ROWS); \
++                geniex_ptq1_prepare_weight_scales(cache + (n) / 4, (const geniex_ptq1_tile *) (w1), (n), GENIEX_PTQ1_TILE_ROWS); \
 +            } \
 +            ptq1_weight_scales = cache; \
 +        } \
@@ -522,7 +528,7 @@ index 9d38546..300f1d3 100644
  
  
  MATMUL_QKV_2D_REPACKED_IMPL(q4_0,       576,  tiled_vec_dot_q4_0_32x2,  tiled_vec_dot_q4_0_32x1)
-@@ -1361,7 +1503,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
+@@ -1361,7 +1509,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
  
      bool is_repacked = (src0->type == HTP_TYPE_Q4_0 || src0->type == HTP_TYPE_Q4_1 ||
                          src0->type == HTP_TYPE_Q8_0 || src0->type == HTP_TYPE_IQ4_NL ||
@@ -531,7 +537,7 @@ index 9d38546..300f1d3 100644
  
      // Compute src0_nrows_per_thread
      mmctx->src0_nrows_per_thread  = (src0_nrows + octx->n_threads - 1) / octx->n_threads;
-@@ -1389,6 +1531,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
+@@ -1389,6 +1537,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                  case HTP_TYPE_Q8_0:   matmul_job_func = hvx_mm_2d_repacked_q8_0;   break;
                  case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mm_2d_repacked_iq4nl;  break;
                  case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mm_2d_repacked_mxfp4;  break;
@@ -539,7 +545,7 @@ index 9d38546..300f1d3 100644
                  default:              return HTP_STATUS_NO_SUPPORT;
              }
          } else {
-@@ -1402,6 +1545,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
+@@ -1402,6 +1551,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                  case HTP_TYPE_Q8_0:   matmul_job_func = hvx_mv_2d_repacked_q8_0;   break;
                  case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mv_2d_repacked_iq4nl;  break;
                  case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mv_2d_repacked_mxfp4;  break;
@@ -547,7 +553,7 @@ index 9d38546..300f1d3 100644
                  default:              return HTP_STATUS_NO_SUPPORT;
              }
          } else {
-@@ -1481,6 +1625,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
+@@ -1481,6 +1631,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                      case HTP_TYPE_Q8_0:   matmul_job_func = hvx_mm_2d_repacked_q8_0_flat;   break;
                      case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mm_2d_repacked_iq4nl_flat;  break;
                      case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mm_2d_repacked_mxfp4_flat;  break;
@@ -555,7 +561,7 @@ index 9d38546..300f1d3 100644
                      default:              return HTP_STATUS_NO_SUPPORT;
                  }
              } else {
-@@ -1490,6 +1635,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
+@@ -1490,6 +1641,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                      case HTP_TYPE_Q8_0:   matmul_job_func = hvx_mv_2d_repacked_q8_0_flat;   break;
                      case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mv_2d_repacked_iq4nl_flat;  break;
                      case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mv_2d_repacked_mxfp4_flat;  break;
