@@ -409,7 +409,7 @@ index 9d38546..300f1d3 100644
  
  #define QUANTIZE_IMPL(name, log_name, kernel_fn, dst_row_size_expr)                                        \
  static void name(unsigned int nth, unsigned int ith, void * data) {                                        \
-@@ -896,17 +954,107 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
+@@ -896,17 +954,116 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
      htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, mmctx->quant_ib_first[ith]);
  }
  
@@ -496,13 +496,22 @@ index 9d38546..300f1d3 100644
 +            } \
 +            ptq1_weight_scales = cache; \
 +        } \
-+        geniex_ptq1_dot_pair_two_rows_flat_q8_scaled((n), (s0), (s1), (s0) + 32, (s1) + 32, \
-+            (const geniex_ptq1_tile *) (w0), (const geniex_ptq1_tile *) (w1), \
-+            (y0), (y1), (rows0), (rows1), (geniex_ptq1_activation *) vtcm_dst_ptr, \
-+            (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE), \
-+            ptq1_prefill_scale_table ? ptq1_prefill_scale_table + ir1 * ptq1_scales_per_row : NULL, \
-+            ptq1_prefill_scale_table ? ptq1_prefill_scale_table + (ir1 + 1) * ptq1_scales_per_row : NULL, \
-+            ptq1_weight_scales, ptq1_weight_scales ? ptq1_weight_scales + (n) / 4 : NULL); \
++        if (ptq1_prefill_scale_table) { \
++            geniex_ptq1_dot_pair_two_rows_flat_q8_scaled((n), (s0), (s1), (s0) + 32, (s1) + 32, \
++                (const geniex_ptq1_tile *) (w0), (const geniex_ptq1_tile *) (w1), \
++                (y0), (y1), (rows0), (rows1), (geniex_ptq1_activation *) vtcm_dst_ptr, \
++                (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE), \
++                ptq1_prefill_scale_table + ir1 * ptq1_scales_per_row, \
++                ptq1_prefill_scale_table + (ir1 + 1) * ptq1_scales_per_row, \
++                ptq1_weight_scales, ptq1_weight_scales ? ptq1_weight_scales + (n) / 4 : NULL); \
++        } else { \
++            geniex_ptq1_dot_pair_two_rows_flat_q8_scaled((n), (s0), (s1), (s0) + 32, (s1) + 32, \
++                (const geniex_ptq1_tile *) (w0), (const geniex_ptq1_tile *) (w1), \
++                (y0), (y1), (rows0), (rows1), (geniex_ptq1_activation *) vtcm_dst_ptr, \
++                (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE), \
++                NULL, NULL, \
++                ptq1_weight_scales, ptq1_weight_scales ? ptq1_weight_scales + (n) / 4 : NULL); \
++        } \
 +        if (bias0) { \
 +            for (int ptq1_row = 0; ptq1_row < (rows0); ++ptq1_row) (s0)[ptq1_row] += (bias0)[ptq1_row]; \
 +            for (int ptq1_row = 0; ptq1_row < (rows1); ++ptq1_row) (s0)[32 + ptq1_row] += (bias0)[32 + ptq1_row]; \
