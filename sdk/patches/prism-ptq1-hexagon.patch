@@ -258,7 +258,7 @@ index 9d38546..300f1d3 100644
 +        }                                                                                                                         \
 +        ptq1_prefill_scale_table = ptq1_prefill_scales;                                                                           \
 +    }                                                                                                                             \
-+    if (PAIR_ENABLED && ne10 == 5120 && src1_nrows > 8 && src1_nrows <= 512 && ct_end - ct_start >= 4) {                         \
++    if (PAIR_ENABLED && (ne10 == 5120 || ne10 == 6144) && src1_nrows > 8 && src1_nrows <= 512 && ct_end - ct_start >= 4) {   \
 +        float * scales = (float *) (vtcm_dst_ptr + htp_mm_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float)));         \
 +        for (uint32_t row = 0; row < src1_nrows; ++row) {                                                                         \
 +            geniex_ptq1_prepare_flat_scales(scales + row * ptq1_scales_per_row, src1_data + row * src1_stride, ne10);           \
@@ -649,7 +649,7 @@ index 6c39366..d6502fd 100644
                      dst_size_per_thread = quant_scratch_size_per_thread;
                  }
 +                if (wtype == HTP_TYPE_PTQ1_0) {
-+                    if (ne10 == 5120 && src1_nrows > 8 && src1_nrows <= 512) {
++                    if ((ne10 == 5120 || ne10 == 6144) && src1_nrows > 8 && src1_nrows <= 512) {
 +                        dst_size_per_thread += (size_t) src1_nrows * 192 * sizeof(float);
 +                    }
 +                    dst_size_per_thread += HTP_MM_PTQ1_ACT_SCRATCH_SIZE;
