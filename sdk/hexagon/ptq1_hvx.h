@@ -163,22 +163,42 @@ static inline void geniex_ptq1_dot_tile_scaled(
         *(HVX_Vector *)partial[b] = Q6_Vh_vadd_VhVh(combined, Q6_V_vror_VR(combined, 64));
     }
 #endif
+    if (weight_scales) {
 #pragma clang loop unroll_count(8)
-    for (unsigned row = 0; row < GENIEX_PTQ1_TILE_ROWS; ++row) {
+        for (unsigned row = 0; row < GENIEX_PTQ1_TILE_ROWS; ++row) {
 #ifdef PTQ1_SCALAR_REDUCE
-        const unsigned lane = row;
+            const unsigned lane = row;
 #endif
-        float sum = 0.0f;
-        for (unsigned b = 0; b < 4; ++b) {
+            float sum = 0.0f;
+            for (unsigned b = 0; b < 4; ++b) {
 #ifdef PTQ1_SCALAR_REDUCE
-            const int32_t value = lanes[b][0][lane] + lanes[b][0][32 + lane] +
-                                  lanes[b][1][lane] + lanes[b][1][32 + lane];
-            sum += scales[b] * value;
+                const int32_t value = lanes[b][0][lane] + lanes[b][0][32 + lane] +
+                                      lanes[b][1][lane] + lanes[b][1][32 + lane];
+                sum += scales[b] * value;
 #else
-            sum += scales[b] * partial[b][row];
+                sum += scales[b] * partial[b][row];
 #endif
+            }
+            outputs[row] = weight_scales[row] * sum;
         }
-        outputs[row] = (weight_scales ? weight_scales[row] : geniex_ptq1_half_to_float(tile->d[row])) * sum;
+    } else {
+#pragma clang loop unroll_count(8)
+        for (unsigned row = 0; row < GENIEX_PTQ1_TILE_ROWS; ++row) {
+#ifdef PTQ1_SCALAR_REDUCE
+            const unsigned lane = row;
+#endif
+            float sum = 0.0f;
+            for (unsigned b = 0; b < 4; ++b) {
+#ifdef PTQ1_SCALAR_REDUCE
+                const int32_t value = lanes[b][0][lane] + lanes[b][0][32 + lane] +
+                                      lanes[b][1][lane] + lanes[b][1][32 + lane];
+                sum += scales[b] * value;
+#else
+                sum += scales[b] * partial[b][row];
+#endif
+            }
+            outputs[row] = geniex_ptq1_half_to_float(tile->d[row]) * sum;
+        }
     }
 }
 
