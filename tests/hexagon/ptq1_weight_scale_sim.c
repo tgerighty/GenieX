@@ -22,6 +22,11 @@ static uint32_t float_bits(float value) {
     return bits;
 }
 
+static float reference_half(uint16_t bits) {
+    union { uint16_t bits; _Float16 value; } half = { .bits = bits };
+    return (float)half.value;
+}
+
 static int check_rows(unsigned offset, unsigned valid_rows) {
     uint8_t storage[2 * sizeof(geniex_ptq1_tile) + 8] __attribute__((aligned(128)));
     float output[2 * ROWS + 2];
@@ -39,7 +44,7 @@ static int check_rows(unsigned offset, unsigned valid_rows) {
     for (unsigned block = 0; block < 2; ++block) {
         for (unsigned row = 0; row < ROWS; ++row) {
             const uint32_t expected = row < valid_rows ?
-                float_bits(geniex_ptq1_half_to_float(tiles[block].d[row])) : sentinel;
+                float_bits(reference_half(tiles[block].d[row])) : sentinel;
             if (float_bits(output[1 + block * ROWS + row]) != expected) return 2;
         }
     }
@@ -56,7 +61,7 @@ static int check_all_half_patterns(void) {
         for (unsigned row = 0; row < ROWS; ++row) tile.d[row] = (uint16_t)(first + row);
         geniex_ptq1_prepare_weight_scales(output, &tile, 128, ROWS);
         for (unsigned row = 0; row < ROWS; ++row) {
-            if (float_bits(output[row]) != float_bits(geniex_ptq1_half_to_float(tile.d[row]))) {
+            if (float_bits(output[row]) != float_bits(reference_half(tile.d[row]))) {
                 printf("PTQ1 scale mismatch raw=%04x\n", tile.d[row]);
                 return 1;
             }
@@ -68,7 +73,7 @@ static int check_all_half_patterns(void) {
         tile.d[i] = special[i];
         geniex_ptq1_prepare_weight_scales(output, &tile, 128, ROWS);
         for (unsigned row = 0; row < ROWS; ++row)
-            if (float_bits(output[row]) != float_bits(geniex_ptq1_half_to_float(tile.d[row]))) return 2;
+            if (float_bits(output[row]) != float_bits(reference_half(tile.d[row]))) return 2;
     }
     for (unsigned offset = 2; offset <= 4; offset += 2)
         for (unsigned rows = 0; rows <= ROWS; ++rows)
@@ -96,7 +101,7 @@ int main(void) {
             for (unsigned row = 0; row < ROWS; ++row) {
                 const unsigned index = block * ROWS + row;
                 const uint32_t actual = float_bits(scales[group][index]);
-                const uint32_t expected = float_bits(geniex_ptq1_half_to_float(weights[group][block].d[row]));
+                const uint32_t expected = float_bits(reference_half(weights[group][block].d[row]));
                 if (actual != expected) return 2;
                 hash = (hash ^ actual) * UINT64_C(1099511628211);
             }
