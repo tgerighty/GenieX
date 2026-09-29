@@ -277,21 +277,23 @@ static inline void geniex_ptq1_prepare_weight_scales(float *scales, const geniex
     uint32_t k, unsigned valid_rows) {
     for (uint32_t block = 0; block < k / GENIEX_PTQ1_BLOCK_K; ++block) {
         if (valid_rows == GENIEX_PTQ1_TILE_ROWS && ((uintptr_t)weights[block].qh & 3u) == 0) {
-            unsigned normal = 1;
-            for (unsigned row = 0; row < GENIEX_PTQ1_TILE_ROWS; ++row) {
-                const uint16_t exponent = weights[block].d[row] & 0x7c00u;
-                if (exponent == 0 || exponent == 0x7c00u) {
-                    normal = 0;
-                    break;
-                }
-            }
-            if (normal) {
-                const HVX_Vector raw = *(const HVX_UVector *)weights[block].qh;
-                const HVX_Vector half = Q6_V_vror_VR(raw, 64);
-                const HVX_Vector h = Q6_V_lo_W(Q6_Wuw_vunpack_Vuh(half));
+            const HVX_Vector raw = *(const HVX_UVector *)weights[block].qh;
+            const HVX_Vector half = Q6_V_vror_VR(raw, 64);
+            const HVX_Vector h = Q6_V_lo_W(Q6_Wuw_vunpack_Vuh(half));
+            const HVX_Vector unsigned_h = Q6_V_vand_VV(h, Q6_V_vsplat_R(0x7fff));
+            // Normal FP16 magnitudes map to 0..0x77ff; zero/subnormals wrap and Inf/NaN exceed it.
+            const HVX_Vector delta = Q6_Vw_vsub_VwVw(unsigned_h, Q6_V_vsplat_R(0x0400));
+            const HVX_VectorPred bad = Q6_Q_vcmp_gt_VuwVuw(delta, Q6_V_vsplat_R(0x77ff));
+            HVX_Vector any = Q6_V_vand_QR(bad, 1);
+            any = Q6_V_vor_VV(any, Q6_V_vror_VR(any, 64));
+            any = Q6_V_vor_VV(any, Q6_V_vror_VR(any, 32));
+            any = Q6_V_vor_VV(any, Q6_V_vror_VR(any, 16));
+            any = Q6_V_vor_VV(any, Q6_V_vror_VR(any, 8));
+            any = Q6_V_vor_VV(any, Q6_V_vror_VR(any, 4));
+            if (Q6_R_vextract_VR(any, 0) == 0) {
                 const HVX_Vector sign = Q6_Vw_vasl_VwR(Q6_V_vand_VV(h, Q6_V_vsplat_R(0x8000)), 16);
                 const HVX_Vector mag = Q6_Vw_vasl_VwR(Q6_Vw_vadd_VwVw(
-                    Q6_V_vand_VV(h, Q6_V_vsplat_R(0x7fff)), Q6_V_vsplat_R(0x1c000)), 13);
+                    unsigned_h, Q6_V_vsplat_R(0x1c000)), 13);
                 *(HVX_UVector *)(scales + block * GENIEX_PTQ1_TILE_ROWS) = Q6_V_vor_VV(sign, mag);
                 continue;
             }
