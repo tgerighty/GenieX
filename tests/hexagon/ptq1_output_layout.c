@@ -82,10 +82,28 @@ static void check_prefill_scratch(void) {
         }
     }
 
+    const uint32_t wide_rows[] = {4, 5, 8, 128, 129};
+    for (size_t i = 0; i < sizeof(wide_rows) / sizeof(wide_rows[0]); ++i) {
+        const uint32_t rows = wide_rows[i];
+        htp_mm_hvx_vtcm_layout_build(&layout, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT,
+            HTP_TYPE_PTQ1_0, 17408, rows, threads, 273 * sizeof(float), 17408 / 128 * 28,
+            17408 * sizeof(float), 0, 2, false, false, false);
+        const size_t table_bytes = rows > 4 && rows <= 128 ? (size_t) rows * 544 * sizeof(float) : 0;
+        assert(layout.dst_bytes / threads == 17408 * sizeof(float) + table_bytes + HTP_MM_PTQ1_ACT_SCRATCH_SIZE);
+        assert(layout.total_bytes <= 8 * 1024 * 1024);
+    }
+
     htp_mm_hvx_vtcm_layout_build(&layout, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT,
         HTP_TYPE_PTQ1_0, 6144, 512, threads, 5120 * sizeof(float), (6144 / 128) * 28,
         6144 * sizeof(float), 5120 * sizeof(float), 2, false, false, false);
     assert(layout.dst_bytes / threads == 6144 * sizeof(float) + 512 * 192 * sizeof(float) + HTP_MM_PTQ1_ACT_SCRATCH_SIZE);
+    assert(layout.src2_bytes == 5120 * sizeof(float));
+    assert(layout.total_bytes <= 8 * 1024 * 1024);
+
+    htp_mm_hvx_vtcm_layout_build(&layout, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT,
+        HTP_TYPE_PTQ1_0, 17408, 128, threads, 5120 * sizeof(float), 17408 / 128 * 28,
+        17408 * sizeof(float), 5120 * sizeof(float), 2, false, false, false);
+    assert(layout.dst_bytes / threads == 17408 * sizeof(float) + 128 * 544 * sizeof(float) + HTP_MM_PTQ1_ACT_SCRATCH_SIZE);
     assert(layout.src2_bytes == 5120 * sizeof(float));
     assert(layout.total_bytes <= 8 * 1024 * 1024);
 
