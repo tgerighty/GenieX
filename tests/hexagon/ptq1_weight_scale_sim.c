@@ -68,13 +68,14 @@ static int check_all_half_patterns(void) {
         }
     }
     const uint16_t special[] = {0, 1, 0x7c00, 0x7e00, 0x8000, 0x8001, 0xfc00, 0xfe00};
-    for (unsigned i = 0; i < sizeof(special) / sizeof(special[0]); ++i) {
-        for (unsigned row = 0; row < ROWS; ++row) tile.d[row] = 0x3c00;
-        tile.d[i] = special[i];
-        geniex_ptq1_prepare_weight_scales(output, &tile, 128, ROWS);
-        for (unsigned row = 0; row < ROWS; ++row)
-            if (float_bits(output[row]) != float_bits(reference_half(tile.d[row]))) return 2;
-    }
+    for (unsigned i = 0; i < sizeof(special) / sizeof(special[0]); ++i)
+        for (unsigned lane = 0; lane < ROWS; ++lane) {
+            for (unsigned row = 0; row < ROWS; ++row) tile.d[row] = 0x3c00;
+            tile.d[lane] = special[i];
+            geniex_ptq1_prepare_weight_scales(output, &tile, 128, ROWS);
+            for (unsigned row = 0; row < ROWS; ++row)
+                if (float_bits(output[row]) != float_bits(reference_half(tile.d[row]))) return 2;
+        }
     for (unsigned offset = 2; offset <= 4; offset += 2)
         for (unsigned rows = 0; rows <= ROWS; ++rows)
             if (check_rows(offset, rows)) return 3;
