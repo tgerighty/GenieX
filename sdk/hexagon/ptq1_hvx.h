@@ -276,6 +276,26 @@ static inline void geniex_ptq1_dot_tile_two(
 static inline void geniex_ptq1_prepare_weight_scales(float *scales, const geniex_ptq1_tile *weights,
     uint32_t k, unsigned valid_rows) {
     for (uint32_t block = 0; block < k / GENIEX_PTQ1_BLOCK_K; ++block) {
+        if (valid_rows == GENIEX_PTQ1_TILE_ROWS && ((uintptr_t)weights[block].qh & 3u) == 0) {
+            unsigned normal = 1;
+            for (unsigned row = 0; row < GENIEX_PTQ1_TILE_ROWS; ++row) {
+                const uint16_t exponent = weights[block].d[row] & 0x7c00u;
+                if (exponent == 0 || exponent == 0x7c00u) {
+                    normal = 0;
+                    break;
+                }
+            }
+            if (normal) {
+                const HVX_Vector raw = *(const HVX_UVector *)weights[block].qh;
+                const HVX_Vector half = Q6_V_vror_VR(raw, 64);
+                const HVX_Vector h = Q6_V_lo_W(Q6_Wuw_vunpack_Vuh(half));
+                const HVX_Vector sign = Q6_Vw_vasl_VwR(Q6_V_vand_VV(h, Q6_V_vsplat_R(0x8000)), 16);
+                const HVX_Vector mag = Q6_Vw_vasl_VwR(Q6_Vw_vadd_VwVw(
+                    Q6_V_vand_VV(h, Q6_V_vsplat_R(0x7fff)), Q6_V_vsplat_R(0x1c000)), 13);
+                *(HVX_UVector *)(scales + block * GENIEX_PTQ1_TILE_ROWS) = Q6_V_vor_VV(sign, mag);
+                continue;
+            }
+        }
 #pragma clang loop unroll_count(8)
         for (unsigned row = 0; row < valid_rows; ++row) {
             scales[block * GENIEX_PTQ1_TILE_ROWS + row] = geniex_ptq1_half_to_float(weights[block].d[row]);
