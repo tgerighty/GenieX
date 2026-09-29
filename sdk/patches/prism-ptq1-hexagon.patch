@@ -472,7 +472,7 @@ index 9d38546..300f1d3 100644
 +#define PTQ1_DOT_PAIR_2X2_MM(n, s0, s1, w0, w1, y0, y1, rows0, rows1, bias0, bias1) do { \
 +    if ((size_t) (n) * sizeof(float) >= HTP_MM_PTQ1_ACT_SCRATCH_SIZE) { \
 +        const float *ptq1_weight_scales = NULL; \
-+        if ((n) == 5120 && src1_nrows >= 4 && ct_end - ct_start >= 4 && \
++        if (((n) == 5120 || (n) == 6144 || (n) == 17408) && src1_nrows >= 4 && ct_end - ct_start >= 4 && \
 +            mmctx->vtcm_dst_size_per_thread >= 2 * HTP_MM_PTQ1_ACT_SCRATCH_SIZE + 2 * (n)) { \
 +            float *cache = (float *) (vtcm_dst_ptr + HTP_MM_PTQ1_ACT_SCRATCH_SIZE); \
 +            if (ir1 == 0) { \
