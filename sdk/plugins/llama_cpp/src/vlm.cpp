@@ -19,6 +19,14 @@
 
 namespace geniex {
 
+static mtmd_bitmap* load_bitmap(mtmd_context* ctx, const char* path) {
+#ifdef GENIEX_MTMD_BITMAP_3_ARG
+    return mtmd_helper_bitmap_init_from_file(ctx, path, false).bitmap;
+#else
+    return mtmd_helper_bitmap_init_from_file(ctx, path, false, mtmd_helper_init_opt_default()).bitmap;
+#endif
+}
+
 LlamaVlm::~LlamaVlm() {
     // ctx_vision and ctx hold pointers into model; free them first.
     if (this->ctx_vision) {
@@ -247,9 +255,7 @@ int32_t LlamaVlm::generate(const geniex_VlmGenerateInput* input, geniex_VlmGener
             GENIEX_LOG_DEBUG("processing {} image(s)", input->config->image_count);
             for (int i = 0; i < input->config->image_count; ++i) {
                 if (input->config->image_paths[i]) {
-                    mtmd_bitmap* bmp = mtmd_helper_bitmap_init_from_file(
-                        this->ctx_vision, input->config->image_paths[i], false, mtmd_helper_init_opt_default())
-                                           .bitmap;
+                    mtmd_bitmap* bmp = load_bitmap(this->ctx_vision, input->config->image_paths[i]);
                     if (bmp) {
                         bitmaps.push_back(bmp);
                         n_media++;
@@ -270,9 +276,7 @@ int32_t LlamaVlm::generate(const geniex_VlmGenerateInput* input, geniex_VlmGener
             GENIEX_LOG_DEBUG("processing {} audio file(s)", input->config->audio_count);
             for (int i = 0; i < input->config->audio_count; ++i) {
                 if (input->config->audio_paths[i]) {
-                    mtmd_bitmap* bmp = mtmd_helper_bitmap_init_from_file(
-                        this->ctx_vision, input->config->audio_paths[i], false, mtmd_helper_init_opt_default())
-                                           .bitmap;
+                    mtmd_bitmap* bmp = load_bitmap(this->ctx_vision, input->config->audio_paths[i]);
                     if (bmp) {
                         bitmaps.push_back(bmp);
                         n_media++;
