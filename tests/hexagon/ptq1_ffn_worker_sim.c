@@ -43,6 +43,9 @@ bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void *data, un
 #define PTQ1_WORKER_N 256
 #endif
 
+/* The scalar reference and serial quantization shim are M1-only. */
+_Static_assert(PTQ1_WORKER_M == 1, "PTQ1 FFN fixture supports M1 only");
+
 enum {
     K = PTQ1_WORKER_K,
     M = PTQ1_WORKER_M,
@@ -218,16 +221,19 @@ int main(void) {
 #endif
 
 #if PTQ1_FFN_FUSED && PTQ1_FFN_REJECT_CHECK
-    for (unsigned test = 0; test < 9; ++test) {
+    for (unsigned test = 0; test < 19; ++test) {
         struct htp_tensor x_bad = x;
         struct htp_tensor w_bad = w_up;
         struct htp_tensor y_bad = y_up;
+        struct htp_tensor y_gate_bad = y_gate;
         kparams->n_prefetch = 2;
+        kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT;
         ctx.vtcm_size = layout.total_bytes;
+        octx.n_threads = PTQ1_WORKER_THREADS;
         octx.src[0] = &w_gate;
         octx.src[1] = &x_bad;
         octx.src[2] = &w_bad;
-        octx.dsts[0] = &y_gate;
+        octx.dsts[0] = &y_gate_bad;
         octx.dsts[1] = &y_bad;
         switch (test) {
             case 0: x_bad.ne[0] = 256; break;
@@ -239,6 +245,16 @@ int main(void) {
             case 6: w_bad.ne[2] = 2; break;
             case 7: y_bad.nb[1] = sizeof(float); break;
             case 8: octx.src[2] = NULL; break;
+            case 9: y_bad.type = HTP_TYPE_F16; break;
+            case 10: y_gate_bad.type = HTP_TYPE_F16; break;
+            case 11: w_bad.ne[1] = N - 1; break;
+            case 12: y_bad.ne[0] = N - 1; break;
+            case 13: kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW; break;
+            case 14: octx.n_threads = 0; break;
+            case 15: w_bad.ne[0] = K - 128; break;
+            case 16: x_bad.ne[2] = 2; break;
+            case 17: octx.src[1] = NULL; break;
+            case 18: octx.dsts[1] = NULL; break;
         }
         const int st = op_matmul_ffn(&octx);
         if (st == HTP_STATUS_OK) {

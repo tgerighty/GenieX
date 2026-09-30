@@ -7,7 +7,7 @@ prism_htp=${1:?pass the Prism llama.cpp checkout path}
 prism_htp=$prism_htp/ggml/src/ggml-hexagon/htp
 if [[ ${2:-} == --ffn-worker && -z ${PTQ1_WORKER_N:-} ]]; then
     want_reject=${PTQ1_FFN_REJECT_CHECK:-0}
-    for n in 256 1 33 81 97 129 273; do
+    for n in 256 1 33 81 97 129 257 273; do
         PTQ1_FFN_REJECT_CHECK=0 PTQ1_WORKER_N=$n PTQ1_WORKER_REPEATS=1 "$0" "${1}" --ffn-worker
     done
     PTQ1_FFN_REJECT_CHECK=0 PTQ1_WORKER_N=256 PTQ1_WORKER_REPEATS=4 "$0" "${1}" --ffn-worker
