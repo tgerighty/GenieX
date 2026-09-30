@@ -218,18 +218,31 @@ int main(void) {
 #endif
 
 #if PTQ1_FFN_FUSED && PTQ1_FFN_REJECT_CHECK
-    {
+    for (unsigned test = 0; test < 9; ++test) {
         struct htp_tensor x_bad = x;
-        x_bad.ne[0] = (K == 5120) ? 256 : 5120;
-        x_bad.ne[1] = (M == 1) ? 3 : 1;
+        struct htp_tensor w_bad = w_up;
+        struct htp_tensor y_bad = y_up;
+        kparams->n_prefetch = 2;
+        ctx.vtcm_size = layout.total_bytes;
         octx.src[0] = &w_gate;
         octx.src[1] = &x_bad;
-        octx.src[2] = &w_up;
+        octx.src[2] = &w_bad;
         octx.dsts[0] = &y_gate;
-        octx.dsts[1] = &y_up;
+        octx.dsts[1] = &y_bad;
+        switch (test) {
+            case 0: x_bad.ne[0] = 256; break;
+            case 1: x_bad.ne[1] = 3; break;
+            case 2: w_bad.type = HTP_TYPE_Q4_0; break;
+            case 3: x_bad.type = HTP_TYPE_F16; break;
+            case 4: kparams->n_prefetch = 4; break;
+            case 5: ctx.vtcm_size = layout.total_bytes - 1; break;
+            case 6: w_bad.ne[2] = 2; break;
+            case 7: y_bad.nb[1] = sizeof(float); break;
+            case 8: octx.src[2] = NULL; break;
+        }
         const int st = op_matmul_ffn(&octx);
         if (st == HTP_STATUS_OK) {
-            puts("PTQ1 FFN reject check failed: unsupported shape returned OK");
+            printf("PTQ1 FFN reject check %u failed: returned OK\n", test);
             return 9;
         }
         if (st != HTP_STATUS_NO_SUPPORT && st != HTP_STATUS_INVAL_PARAMS &&
@@ -237,9 +250,18 @@ int main(void) {
             printf("PTQ1 FFN reject check unexpected status %d\n", st);
             return 9;
         }
-        puts("PTQ1 FFN reject check passed");
-        return 0;
+        for (unsigned i = 0; i < ROW_STRIDE; ++i) {
+            if (outputs_gate[0][i] != 12345.0f || outputs_up[0][i] != 12345.0f) return 9;
+        }
+        for (size_t i = 0; i < layout.total_bytes + 128; ++i) {
+            if (vtcm[i] != 0xa5) return 9;
+        }
+#if PTQ1_FFN_COUNT_QUANT
+        if (ptq1_ffn_flat_quant_calls != 0) return 9;
+#endif
     }
+    puts("PTQ1 FFN reject check passed");
+    return 0;
 #endif
 
     for (unsigned repeat = 0; repeat < PTQ1_WORKER_REPEATS; ++repeat) {
