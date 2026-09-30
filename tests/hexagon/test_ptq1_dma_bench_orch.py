@@ -14,9 +14,21 @@ SHAPES = [
     (17408, 3, 97), (17408, 3, 256), (17408, 4, 256), (17408, 5, 256),
     (17408, 5, 273), (17408, 8, 256),
 ]
+INVALID_CONFIGS = (
+    {"PTQ1_BENCH_SHARD_INDEX": "0"},
+    {"PTQ1_BENCH_SHARD_INDEX": "", "PTQ1_BENCH_SHARD_COUNT": ""},
+    {"PTQ1_BENCH_SHARD_INDEX": "4", "PTQ1_BENCH_SHARD_COUNT": "4"},
+    {"PTQ1_BENCH_SHARD_INDEX": "00", "PTQ1_BENCH_SHARD_COUNT": "4"},
+    {"PTQ1_BENCH_SHARD_INDEX": "0", "PTQ1_BENCH_SHARD_COUNT": "0"},
+    {"PTQ1_BENCH_SHARD_INDEX": "0", "PTQ1_BENCH_SHARD_COUNT": "4", "PTQ1_BENCH_BATCH": "1"},
+    {"PTQ1_BENCH_SHARD_INDEX": "0", "PTQ1_BENCH_SHARD_COUNT": "4", "PTQ1_WORKER_M": "1"},
+    {"PTQ1_BENCH_SHARD_INDEX": "0", "PTQ1_BENCH_SHARD_COUNT": "4", "PTQ1_WORKER_N": "33"},
+    {"PTQ1_BENCH_BATCH": "2"},
+    {"PTQ1_BENCH_CACHE_DIR": "relative"},
+)
 
 
-def main():
+def main() -> None:
     # Replace only recursive invocations with a shape recorder. The actual
     # parent's dispatch, validation and shard selection execute unchanged.
     with tempfile.TemporaryDirectory(prefix="ptq1-dispatch-") as tmp:
@@ -35,7 +47,7 @@ def main():
         runner.chmod(0o700)
         env = {k: v for k, v in os.environ.items() if not k.startswith("PTQ1_")}
 
-        def run(**options):
+        def run(**options: str) -> subprocess.CompletedProcess[str]:
             return subprocess.run(
                 [str(runner), "/unused", "--worker"], env={**env, **options},
                 capture_output=True, text=True, check=False,
@@ -53,18 +65,7 @@ def main():
                 assert shapes == SHAPES[index::count], shapes
                 union.extend(shapes)
             assert sorted(union) == sorted(SHAPES)
-        for options in (
-            {"PTQ1_BENCH_SHARD_INDEX": "0"},
-            {"PTQ1_BENCH_SHARD_INDEX": "", "PTQ1_BENCH_SHARD_COUNT": ""},
-            {"PTQ1_BENCH_SHARD_INDEX": "4", "PTQ1_BENCH_SHARD_COUNT": "4"},
-            {"PTQ1_BENCH_SHARD_INDEX": "00", "PTQ1_BENCH_SHARD_COUNT": "4"},
-            {"PTQ1_BENCH_SHARD_INDEX": "0", "PTQ1_BENCH_SHARD_COUNT": "0"},
-            {"PTQ1_BENCH_SHARD_INDEX": "0", "PTQ1_BENCH_SHARD_COUNT": "4", "PTQ1_BENCH_BATCH": "1"},
-            {"PTQ1_BENCH_SHARD_INDEX": "0", "PTQ1_BENCH_SHARD_COUNT": "4", "PTQ1_WORKER_M": "1"},
-            {"PTQ1_BENCH_SHARD_INDEX": "0", "PTQ1_BENCH_SHARD_COUNT": "4", "PTQ1_WORKER_N": "33"},
-            {"PTQ1_BENCH_BATCH": "2"},
-            {"PTQ1_BENCH_CACHE_DIR": "relative"},
-        ):
+        for options in INVALID_CONFIGS:
             result = run(**options)
             assert result.returncode != 0, options
         link = root / "cache-link"
