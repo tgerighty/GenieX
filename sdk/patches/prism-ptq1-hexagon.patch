@@ -20,7 +20,7 @@ index 845b922..dae60fd 100644
              -DPREBUILT_LIB_DIR="toolv19_${V}")
      list(APPEND HTP_SKELS ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp-${V}.so)
 diff --git a/ggml/src/ggml-hexagon/ggml-hexagon.cpp b/ggml/src/ggml-hexagon/ggml-hexagon.cpp
-index 2cd015b..0dfbfaa 100644
+index 2cd015b..489b1c7 100644
 --- a/ggml/src/ggml-hexagon/ggml-hexagon.cpp
 +++ b/ggml/src/ggml-hexagon/ggml-hexagon.cpp
 @@ -54,6 +54,7 @@
@@ -208,7 +208,7 @@ index 2cd015b..0dfbfaa 100644
          case GGML_TYPE_Q4_0:
          case GGML_TYPE_Q4_1:
          case GGML_TYPE_Q8_0:
-@@ -3520,9 +3600,48 @@ static bool mm_is_hmx_eligible(const ggml_tensor * t) {
+@@ -3520,9 +3600,52 @@ static bool mm_is_hmx_eligible(const ggml_tensor * t) {
  static bool is_mergeable_mul_mat(const ggml_tensor * t) {
      if (!t || t->op != GGML_OP_MUL_MAT)   return false;
      if (t->src[1]->type != GGML_TYPE_F32) return false;
@@ -226,6 +226,10 @@ index 2cd015b..0dfbfaa 100644
 +        return false;
 +    }
 +    if (n1->src[1]->type != GGML_TYPE_F32 || n2->src[1]->type != GGML_TYPE_F32) {
++        return false;
++    }
++    if (n1->type != GGML_TYPE_F32 || n2->type != GGML_TYPE_F32 ||
++        n1->nb[1] < n1->ne[0] * sizeof(float) || n2->nb[1] < n2->ne[0] * sizeof(float)) {
 +        return false;
 +    }
 +    if (n1->src[1] != n2->src[1]) {
@@ -257,7 +261,7 @@ index 2cd015b..0dfbfaa 100644
  static bool is_mergeable_mul_mat_pair(const ggml_tensor * n1, const ggml_tensor * n2) {
      if (!is_mergeable_mul_mat(n1) || !is_mergeable_mul_mat(n2)) {
          return false;
-@@ -3609,7 +3728,7 @@ static bool try_fuse_node(const ggml_hexagon_session * sess, const ggml_cgraph *
+@@ -3609,7 +3732,7 @@ static bool try_fuse_node(const ggml_hexagon_session * sess, const ggml_cgraph *
          }
          if (is_mergeable_mul_mat_pair(n, n1)) {
              struct htp_mm_kernel_params kparams;
@@ -266,13 +270,13 @@ index 2cd015b..0dfbfaa 100644
              if ((size_t)kparams.vtcm_size <= sess->vtcm_size) {
                  htp_opnode node(n, {}, HTP_OP_MUL_MAT_FFN);
                  node.add_fused(n1, true);
-@@ -3622,6 +3741,20 @@ static bool try_fuse_node(const ggml_hexagon_session * sess, const ggml_cgraph *
+@@ -3622,6 +3745,20 @@ static bool try_fuse_node(const ggml_hexagon_session * sess, const ggml_cgraph *
                              kparams.vtcm_size, sess->vtcm_size);
              }
          }
 +    } else if (is_mergeable_ptq1_ffn_pair(n, next_node)) {
 +        struct htp_mm_kernel_params kparams;
-+        ggml_hexagon_precompute_fused_ffn_params(sess, n->src[0], n->src[1], n->nb[1], &kparams);
++        ggml_hexagon_precompute_fused_ffn_params(sess, n->src[0], n->src[1], n->ne[0] * sizeof(float), &kparams);
 +        if ((size_t)kparams.vtcm_size <= sess->vtcm_size) {
 +            htp_opnode node(n, {}, HTP_OP_MUL_MAT_FFN);
 +            node.add_fused(next_node, true);
@@ -287,7 +291,7 @@ index 2cd015b..0dfbfaa 100644
      }
 
      if (n->op == GGML_OP_MUL_MAT && next_node) {
-@@ -4378,6 +4511,8 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
+@@ -4378,6 +4515,8 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
                    "please update hexagon_type to match ggml_type");
      static_assert((unsigned int) HTP_TYPE_IQ4_NL == (unsigned int) GGML_TYPE_IQ4_NL,
                    "please update hexagon_type to match ggml_type");
@@ -340,7 +344,7 @@ index a138f06..f444115 100644
      // types used internally for repack, dyn.quant, etc
      HTP_TYPE_Q4_0_TILED = 200,
 diff --git a/ggml/src/ggml-hexagon/htp/matmul-ops.c b/ggml/src/ggml-hexagon/htp/matmul-ops.c
-index 9d38546..b2f08be 100644
+index 9d38546..3b2ea84 100644
 --- a/ggml/src/ggml-hexagon/htp/matmul-ops.c
 +++ b/ggml/src/ggml-hexagon/htp/matmul-ops.c
 @@ -23,6 +23,10 @@
@@ -856,11 +860,14 @@ index 9d38546..b2f08be 100644
                      default:              return HTP_STATUS_NO_SUPPORT;
                  }
              }
-@@ -3848,9 +4156,10 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
+@@ -3848,9 +4156,13 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
      const struct htp_tensor * restrict dst_gate = octx->dsts[0];
      const struct htp_tensor * restrict dst_up = octx->dsts[1];
 
 +    const bool is_ptq1 = (src0->type == HTP_TYPE_PTQ1_0);
++    if (is_ptq1 && (!src1 || !src2 || !dst_gate || !dst_up)) {
++        return HTP_STATUS_INVAL_PARAMS;
++    }
      bool is_repacked = (src0->type == HTP_TYPE_Q4_0 || src0->type == HTP_TYPE_Q4_1 ||
                          src0->type == HTP_TYPE_Q8_0 || src0->type == HTP_TYPE_IQ4_NL ||
 -                        src0->type == HTP_TYPE_MXFP4);
@@ -868,7 +875,7 @@ index 9d38546..b2f08be 100644
 
      struct htp_mm_context mmctx_struct = {0};
      struct htp_mm_context * mmctx = &mmctx_struct;
-@@ -3861,6 +4170,24 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
+@@ -3861,6 +4173,24 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
      const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
      const uint32_t src1_nrows = src1->ne[1] * src1->ne[2] * src1->ne[3];
 
@@ -893,7 +900,7 @@ index 9d38546..b2f08be 100644
      // Compute src0_nrows_per_thread
      mmctx->src0_nrows_per_thread  = (src0_nrows + octx->n_threads - 1) / octx->n_threads;
      if (is_repacked) {
-@@ -3871,10 +4198,7 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
+@@ -3871,10 +4201,7 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
 
      const size_t src0_row_size = src0->nb[1];
      const size_t src0_row_size_padded = hex_round_up(src0_row_size, 128);
@@ -901,11 +908,11 @@ index 9d38546..b2f08be 100644
 -    if (hvx_mm_init_vec_dot(mmctx, src0->type) != 0) {
 -        return HTP_STATUS_NO_SUPPORT;
 -    }
-+    const size_t dst_row_size = is_ptq1 ? dst_gate->nb[1] : 0;
++    const size_t dst_row_size = is_ptq1 ? src0->ne[1] * sizeof(float) : 0;
 
      const uint32_t qk = QK_Q8_0_TILED;
      const uint32_t nb = (src1->ne[0] + qk - 1) / qk;
-@@ -3910,15 +4234,27 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
+@@ -3910,15 +4237,27 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
 
      struct htp_mm_hvx_vtcm_layout L;
      htp_mm_hvx_vtcm_layout_build(&L, kparams->kernel_type, src0->type, src1->ne[0], src1_nrows, octx->n_threads,
@@ -934,7 +941,7 @@ index 9d38546..b2f08be 100644
      uint8_t * const base = (uint8_t *) octx->ctx->vtcm_base;
      mmctx->vtcm_src1 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src1);
      mmctx->vtcm_src0 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src0);
-@@ -3955,6 +4291,7 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
+@@ -3955,6 +4294,7 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
                  case HTP_TYPE_Q8_0:   matmul_job_func = hvx_mm_ffn_2d_repacked_q8_0_flat;   break;
                  case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mm_ffn_2d_repacked_iq4nl_flat;  break;
                  case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mm_ffn_2d_repacked_mxfp4_flat;  break;

@@ -13,15 +13,21 @@
 #ifndef PTQ1_FFN_REJECT_CHECK
 #define PTQ1_FFN_REJECT_CHECK 0
 #endif
+#ifndef PTQ1_WORKER_THREADS
+#define PTQ1_WORKER_THREADS 1
+#endif
 
 /* When PTQ1_FFN_COUNT_QUANT=1, compile with -I ptq1_ffn_quant_wrap ahead of HTP so the
  * wrap header counts real flat quantizer calls without production hooks. */
 #include "matmul-ops.c"
 
 bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void *data, unsigned n) {
-    (void)q; (void)func; (void)data; (void)n;
-    assert(0);
-    return false;
+    (void)q;
+    assert(n == PTQ1_WORKER_THREADS && n > 1);
+    // Serial slice coverage only. Worker 0 completes M1 quantization before other slices.
+    // This does not test concurrent scheduling or provide an eight-worker speed result.
+    for (unsigned i = 0; i < n; ++i) func(n, i, data);
+    return true;
 }
 
 #ifndef PTQ1_WORKER_K
@@ -54,8 +60,8 @@ static float activations[M][K] __attribute__((aligned(128)));
 static float outputs_gate[M][ROW_STRIDE] __attribute__((aligned(128)));
 static float outputs_up[M][ROW_STRIDE] __attribute__((aligned(128)));
 /* Fused two rings + full-K cache for K5120 exceeds 524288. */
-static uint8_t vtcm[1048576] __attribute__((aligned(128)));
-static uint8_t queue_storage[8192] __attribute__((aligned(128)));
+static uint8_t vtcm[(PTQ1_WORKER_THREADS == 1 ? 1048576 : 8 * 1048576) + 128] __attribute__((aligned(128)));
+static uint8_t queue_storage[PTQ1_WORKER_THREADS][8192] __attribute__((aligned(128)));
 
 static int scalar_trit(uint8_t packed, unsigned power) {
     return (int)((((uint8_t)(packed * power)) * 3u) >> 8) - 1;
@@ -181,7 +187,7 @@ int main(void) {
     };
 
     struct htp_context ctx = {0};
-    struct htp_ops_context octx = { .ctx = &ctx, .n_threads = 1 };
+    struct htp_ops_context octx = { .ctx = &ctx, .n_threads = PTQ1_WORKER_THREADS };
     struct htp_mm_kernel_params *kparams = (struct htp_mm_kernel_params *)octx.kernel_params;
     kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT;
     kparams->n_prefetch = 2;
@@ -189,11 +195,11 @@ int main(void) {
     struct htp_mm_hvx_vtcm_layout layout;
 #if PTQ1_FFN_FUSED
     /* Candidate: fused FFN layout with dst row bytes so cache guards match production. */
-    htp_mm_hvx_vtcm_layout_build(&layout, kparams->kernel_type, HTP_TYPE_PTQ1_0, K, M, 1,
-        y_gate.nb[1], w_gate.nb[1], htp_mm_q8_0_flat_row_size(K), 0, 2, false, false, true);
+    htp_mm_hvx_vtcm_layout_build(&layout, kparams->kernel_type, HTP_TYPE_PTQ1_0, K, M, PTQ1_WORKER_THREADS,
+        N * sizeof(float), w_gate.nb[1], htp_mm_q8_0_flat_row_size(K), 0, 2, false, false, true);
 #else
     /* Baseline: existing single-op layout exactly (bias-free src2 row size 0). */
-    htp_mm_hvx_vtcm_layout_build(&layout, kparams->kernel_type, HTP_TYPE_PTQ1_0, K, M, 1,
+    htp_mm_hvx_vtcm_layout_build(&layout, kparams->kernel_type, HTP_TYPE_PTQ1_0, K, M, PTQ1_WORKER_THREADS,
         y_gate.nb[1], w_gate.nb[1], htp_mm_q8_0_flat_row_size(K), 0, 2, false, false, false);
 #endif
     if (layout.total_bytes + 128 > sizeof(vtcm)) return 1;
@@ -202,10 +208,10 @@ int main(void) {
     ctx.vtcm_base = vtcm;
     ctx.vtcm_size = layout.total_bytes;
 
-    const size_t dma_vtcm_off = layout.off_src0;
-    const size_t dma_vtcm_bytes = layout.src0_bytes + layout.src2_bytes;
-    ctx.dma[0] = dma_queue_init(queue_storage, 16, (uintptr_t)(vtcm + dma_vtcm_off),
-                                dma_vtcm_bytes ? dma_vtcm_bytes : layout.src0_bytes, &ctx.trace[0]);
+    for (unsigned i = 0; i < PTQ1_WORKER_THREADS; ++i) {
+        ctx.dma[i] = dma_queue_init(queue_storage[i], 16, (uintptr_t)vtcm,
+                                   layout.total_bytes, &ctx.trace[i]);
+    }
 
 #if PTQ1_FFN_COUNT_QUANT
     ptq1_ffn_flat_quant_calls = 0;
@@ -303,6 +309,6 @@ int main(void) {
 #if PTQ1_FFN_COUNT_QUANT
     printf(" flat_quant_calls %u", ptq1_ffn_flat_quant_calls);
 #endif
-    printf(" fused=%d\n", PTQ1_FFN_FUSED);
+    printf(" fused=%d worker_slices=%d\n", PTQ1_FFN_FUSED, PTQ1_WORKER_THREADS);
     return 0;
 }

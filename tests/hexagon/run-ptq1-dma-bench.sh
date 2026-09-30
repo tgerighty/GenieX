@@ -96,6 +96,7 @@ if [[ ${2:-} == --ffn-worker ]]; then
     "$tools/hexagon-clang" "${includes[@]}" "${flags[@]}" -fpic -ffunction-sections -fdata-sections \
         -DPTQ1_WORKER_K="$worker_k" -DPTQ1_WORKER_M="$worker_m" -DPTQ1_WORKER_N="$worker_n" \
         -DPTQ1_WORKER_REPEATS="$worker_repeats" -DPTQ1_FFN_FUSED="$fused" \
+        -DPTQ1_WORKER_THREADS="${PTQ1_WORKER_THREADS:-1}" \
         -DPTQ1_FFN_COUNT_QUANT="$count_quant" -DPTQ1_FFN_REJECT_CHECK="$reject_check" \
         -c "$here/ptq1_ffn_worker_sim.c" -o "$build_dir/ffn_worker.o"
     "$tools/hexagon-clang" "${flags[@]}" -Wl,--gc-sections \
