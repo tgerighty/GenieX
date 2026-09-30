@@ -334,7 +334,7 @@ index 9d38546..300f1d3 100644
      uint32_t tile_row_stride = n_k_tiles_w * tile_size;                                                                           \
      uint32_t tile_row_transfer_size_aligned = n_k_tiles_a * aligned_tile_size;                                                    \
                                                                                                                                    \
-@@ -469,15 +504,28 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
+@@ -469,15 +504,41 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
          return;                                                                                                                   \
      }                                                                                                                             \
                                                                                                                                    \
@@ -344,6 +344,19 @@ index 9d38546..300f1d3 100644
 +        geniex_ptq1_prepare_flat_scales(ptq1_scales, src1_col, ne10);                                                            \
 +        ptq1_scale_table = ptq1_scales;                                                                                           \
 +    }                                                                                                                             \
++    const geniex_ptq1_activation * ptq1_act_cache = NULL;                                                                      \
++    if (PAIR_ENABLED && ne10 == 5120 && ct_end - ct_start >= 4) {                                                               \
++        const size_t ptq1_quant_bytes = htp_mm_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float));                 \
++        const size_t ptq1_out_bytes = htp_mm_round_up(((size_t) ne0 * sizeof(float) + nth - 1) / nth, 128);                    \
++        if (ptq1_out_bytes <= ptq1_quant_bytes &&                                                                              \
++            mmctx->vtcm_dst_size_per_thread >= ptq1_quant_bytes + HTP_MM_PTQ1_ACT_CACHE_SIZE + HTP_MM_PTQ1_ACT_SCRATCH_SIZE) { \
++            geniex_ptq1_activation * cache = (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread        \
++                - HTP_MM_PTQ1_ACT_SCRATCH_SIZE - HTP_MM_PTQ1_ACT_CACHE_SIZE);                                                 \
++            for (uint32_t kb = 0; kb < ne10 / GENIEX_PTQ1_BLOCK_K; ++kb)                                                       \
++                geniex_ptq1_prepare_activation(&cache[kb], (const int8_t *) src1_col + kb * GENIEX_PTQ1_BLOCK_K);              \
++            ptq1_act_cache = cache;                                                                                           \
++        }                                                                                                                     \
++    }                                                                                                                         \
      for (uint32_t ct = ct_start; ct < ct_end; ct++) {                                                                             \
          const uint8_t * w_tile = dma_queue_pop(dma_queue).dst;                                                                    \
                                                                                                                                    \
@@ -461,12 +474,12 @@ index 9d38546..300f1d3 100644
 +#define PTQ1_DOT_PAIR(n, s0, s1, w0, w1, y, rows0, rows1, sz) \
 +    geniex_ptq1_dot_pair_flat_q8((n), (s0), (s1), (const geniex_ptq1_tile *) (w0), \
 +        (const geniex_ptq1_tile *) (w1), (y), (rows0), (rows1), \
-+        (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE))
++        (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE), ptq1_act_cache)
 +#define PTQ1_DOT_PAIR_SCALED(n, s0, s1, w0, w1, y, rows0, rows1, sz) do { \
 +    if (ptq1_scale_table) { \
 +        geniex_ptq1_dot_pair_flat_q8_scaled((n), (s0), (s1), (const geniex_ptq1_tile *) (w0), \
 +            (const geniex_ptq1_tile *) (w1), (y), (rows0), (rows1), \
-+            (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE), ptq1_scale_table); \
++            (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE), ptq1_scale_table, ptq1_act_cache); \
 +    } else { \
 +        PTQ1_DOT_PAIR(n, s0, s1, w0, w1, y, rows0, rows1, sz); \
 +    } \
@@ -478,7 +491,7 @@ index 9d38546..300f1d3 100644
 +        mmctx->vtcm_dst_size_per_thread >= 2 * HTP_MM_PTQ1_ACT_SCRATCH_SIZE + 2 * (n)) { \
 +        ptq1_weight_scales = (const float *) (vtcm_dst_ptr + HTP_MM_PTQ1_ACT_SCRATCH_SIZE); \
 +    } \
-+    geniex_ptq1_dot_pair_flat_q8_cached((n), (s0), (s1), (const geniex_ptq1_tile *) (w0), (const geniex_ptq1_tile *) (w1), (y), (rows0), (rows1), (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE), ptq1_prefill_scale_table ? ptq1_prefill_scale_table + ir1 * ptq1_scales_per_row : NULL, ptq1_weight_scales, ptq1_weight_scales ? ptq1_weight_scales + (n) / 4 : NULL); \
++    geniex_ptq1_dot_pair_flat_q8_cached((n), (s0), (s1), (const geniex_ptq1_tile *) (w0), (const geniex_ptq1_tile *) (w1), (y), (rows0), (rows1), (geniex_ptq1_activation *) (vtcm_dst_ptr + mmctx->vtcm_dst_size_per_thread - HTP_MM_PTQ1_ACT_SCRATCH_SIZE), ptq1_prefill_scale_table ? ptq1_prefill_scale_table + ir1 * ptq1_scales_per_row : NULL, ptq1_weight_scales, ptq1_weight_scales ? ptq1_weight_scales + (n) / 4 : NULL, NULL); \
 +    if (bias) { \
 +        for (int ptq1_row = 0; ptq1_row < (rows0); ++ptq1_row) (s0)[ptq1_row] += (bias)[ptq1_row]; \
 +        for (int ptq1_row = 0; ptq1_row < (rows1); ++ptq1_row) (s1)[ptq1_row] += (bias)[32 + ptq1_row]; \
@@ -590,12 +603,13 @@ index 6c39366..d6502fd 100644
  
  // --- Weight Repacked Aligned Tile Sizes ---
  #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q4_0   640
-@@ -32,6 +33,8 @@ extern "C" {
+@@ -32,6 +33,9 @@ extern "C" {
  #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q8_0   1152
  #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_IQ4_NL 640
  #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_MXFP4  640
 +#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_PTQ1_0 896
 +#define HTP_MM_PTQ1_ACT_SCRATCH_SIZE 8704
++#define HTP_MM_PTQ1_ACT_CACHE_SIZE 348160
  
  // --- Activation Tiled Block Sizes (including padding) ---
  #define HTP_MM_ACT_TILE_SIZE_Q8_0      1152
@@ -653,7 +667,7 @@ index 6c39366..d6502fd 100644
                      uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
                      size_t repacked_vtcm_size = htp_mm_round_up(n_prefetch * tile_row_size, 256);
                      src0_sz = repacked_vtcm_size * n_threads;
-@@ -604,9 +613,18 @@ static inline void htp_mm_hvx_vtcm_layout_build(
+@@ -604,9 +613,21 @@ static inline void htp_mm_hvx_vtcm_layout_build(
  
                  size_t quant_scratch_size_per_thread = htp_mm_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float));
                  size_t dst_size_per_thread = dst_nrows > 0 ? htp_mm_round_up(dst_row_size, 128) : 0;
@@ -666,6 +680,9 @@ index 6c39366..d6502fd 100644
 +                if (wtype == HTP_TYPE_PTQ1_0) {
 +                    if (((ne10 == 5120 || ne10 == 6144) && src1_nrows > 8 && src1_nrows <= 512) || (ne10 == 17408 && src1_nrows > 4 && src1_nrows <= 128)) {
 +                        dst_size_per_thread += (size_t) src1_nrows * (ne10 == 17408 ? 544 : 192) * sizeof(float);
++                    }
++                    if (ne10 == 5120 && src1_nrows == 1 && dst_row_size > (size_t) n_threads * 96 * sizeof(float) && dst_size_per_thread == quant_scratch_size_per_thread) {
++                        dst_size_per_thread += HTP_MM_PTQ1_ACT_CACHE_SIZE;
 +                    }
 +                    dst_size_per_thread += HTP_MM_PTQ1_ACT_SCRATCH_SIZE;
 +                }

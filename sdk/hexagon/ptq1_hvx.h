@@ -342,7 +342,8 @@ static inline void geniex_ptq1_dot_flat_q8(uint32_t k, float *outputs, const gen
 static inline void geniex_ptq1_dot_pair_flat_q8_cached(uint32_t k, float *outputs0, float *outputs1,
     const geniex_ptq1_tile *weights0, const geniex_ptq1_tile *weights1, const void *flat_q8, unsigned valid_rows0,
     unsigned valid_rows1, geniex_ptq1_activation *scratch, const float *prepared_scales,
-    const float *weight_scales0, const float *weight_scales1) {
+    const float *weight_scales0, const float *weight_scales1,
+    const geniex_ptq1_activation *prepared_activations) {
     const int8_t  *quants      = (const int8_t *)flat_q8;
     const uint8_t *scale_bytes = (const uint8_t *)flat_q8 + k;
     float          partial[GENIEX_PTQ1_TILE_ROWS];
@@ -354,18 +355,20 @@ static inline void geniex_ptq1_dot_pair_flat_q8_cached(uint32_t k, float *output
     for (uint32_t block = 0; block < k / GENIEX_PTQ1_BLOCK_K; ++block) {
         float scales[4];
         if (!prepared_scales) geniex_ptq1_flat_scales(scales, scale_bytes, block);
-        geniex_ptq1_prepare_activation(scratch, quants + block * GENIEX_PTQ1_BLOCK_K);
+        const geniex_ptq1_activation *activation = prepared_activations ? &prepared_activations[block] : scratch;
+        if (!prepared_activations)
+            geniex_ptq1_prepare_activation(scratch, quants + block * GENIEX_PTQ1_BLOCK_K);
         // Each prepared scale is read before its partial output overwrites it.
         if (!weight_scales0)
             geniex_ptq1_prepare_weight_scales(partial, &weights0[block], GENIEX_PTQ1_BLOCK_K, GENIEX_PTQ1_TILE_ROWS);
-        geniex_ptq1_dot_tile_scaled(&weights0[block], scratch,
+        geniex_ptq1_dot_tile_scaled(&weights0[block], activation,
             prepared_scales ? prepared_scales + 4 * block : scales, partial,
             weight_scales0 ? weight_scales0 + block * GENIEX_PTQ1_TILE_ROWS : partial);
 #pragma clang loop unroll_count(4)
         for (unsigned row = 0; row < valid_rows0; ++row) outputs0[row] += partial[row];
         if (!weight_scales1)
             geniex_ptq1_prepare_weight_scales(partial, &weights1[block], GENIEX_PTQ1_BLOCK_K, GENIEX_PTQ1_TILE_ROWS);
-        geniex_ptq1_dot_tile_scaled(&weights1[block], scratch,
+        geniex_ptq1_dot_tile_scaled(&weights1[block], activation,
             prepared_scales ? prepared_scales + 4 * block : scales, partial,
             weight_scales1 ? weight_scales1 + block * GENIEX_PTQ1_TILE_ROWS : partial);
 #pragma clang loop unroll_count(4)
@@ -375,16 +378,18 @@ static inline void geniex_ptq1_dot_pair_flat_q8_cached(uint32_t k, float *output
 
 static inline void geniex_ptq1_dot_pair_flat_q8_scaled(uint32_t k, float *outputs0, float *outputs1,
     const geniex_ptq1_tile *weights0, const geniex_ptq1_tile *weights1, const void *flat_q8, unsigned valid_rows0,
-    unsigned valid_rows1, geniex_ptq1_activation *scratch, const float *prepared_scales) {
+    unsigned valid_rows1, geniex_ptq1_activation *scratch, const float *prepared_scales,
+    const geniex_ptq1_activation *prepared_activations) {
     geniex_ptq1_dot_pair_flat_q8_cached(k, outputs0, outputs1, weights0, weights1, flat_q8,
-        valid_rows0, valid_rows1, scratch, prepared_scales, NULL, NULL);
+        valid_rows0, valid_rows1, scratch, prepared_scales, NULL, NULL, prepared_activations);
 }
 
 static inline void geniex_ptq1_dot_pair_flat_q8(uint32_t k, float *outputs0, float *outputs1,
     const geniex_ptq1_tile *weights0, const geniex_ptq1_tile *weights1, const void *flat_q8, unsigned valid_rows0,
-    unsigned valid_rows1, geniex_ptq1_activation *scratch) {
+    unsigned valid_rows1, geniex_ptq1_activation *scratch,
+    const geniex_ptq1_activation *prepared_activations) {
     geniex_ptq1_dot_pair_flat_q8_scaled(k, outputs0, outputs1, weights0, weights1, flat_q8,
-        valid_rows0, valid_rows1, scratch, NULL);
+        valid_rows0, valid_rows1, scratch, NULL, prepared_activations);
 }
 
 static inline void geniex_ptq1_dot_two_rows_flat_q8(uint32_t k, float *outputs0, float *outputs1,

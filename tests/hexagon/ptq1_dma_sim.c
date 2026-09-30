@@ -78,7 +78,8 @@ int main(void) {
                 flat_q8,
                 GENIEX_PTQ1_TILE_ROWS,
                 GENIEX_PTQ1_TILE_ROWS,
-                &prepared);
+                &prepared,
+                NULL);
         } else {
             geniex_ptq1_dot_flat_q8(K, outputs[ct], w0, flat_q8, GENIEX_PTQ1_TILE_ROWS, &prepared);
         }
