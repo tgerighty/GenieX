@@ -345,7 +345,7 @@ index 9d38546..300f1d3 100644
 +        ptq1_scale_table = ptq1_scales;                                                                                           \
 +    }                                                                                                                             \
 +    const geniex_ptq1_activation * ptq1_act_cache = NULL;                                                                      \
-+    if (PAIR_ENABLED && ne10 == 5120 && src1_nrows == 1 && ct_end - ct_start >= 4) {                                            \
++    if (PAIR_ENABLED && ne10 == 5120 && ct_end - ct_start >= 4) {                                                               \
 +        const size_t ptq1_quant_bytes = htp_mm_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float));                 \
 +        const size_t ptq1_out_bytes = htp_mm_round_up(((size_t) ne0 * sizeof(float) + nth - 1) / nth, 128);                    \
 +        if (ptq1_out_bytes <= ptq1_quant_bytes &&                                                                              \
