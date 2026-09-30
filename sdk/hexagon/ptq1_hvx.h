@@ -49,12 +49,18 @@ static inline void geniex_ptq1_prepare_act_pair(
 #endif
 }
 
+// Prism stores qs in a 16-byte stage followed by an 8-byte stage.
+static inline unsigned geniex_ptq1_qs_activation_index(unsigned group, unsigned power, unsigned lane) {
+    return group < 2 ? power * 16 + group * 8 + lane : 80 + power * 8 + lane;
+}
+
 static inline void geniex_ptq1_prepare_activation(geniex_ptq1_activation *prepared, const int8_t *activation) {
     for (unsigned group = 0; group < 3; ++group) {
         for (unsigned n = 0; n < 5; ++n) {
             for (unsigned chunk = 0; chunk < 2; ++chunk) {
                 geniex_ptq1_prepare_act_pair(
-                    &prepared->qs[group][n][chunk], activation, group * 40 + n * 8 + chunk * 4, 4);
+                    &prepared->qs[group][n][chunk], activation,
+                    geniex_ptq1_qs_activation_index(group, n, chunk * 4), 4);
             }
         }
     }
@@ -110,7 +116,7 @@ static inline void geniex_ptq1_dot_tile(
 #pragma clang loop unroll(full)
         for (unsigned n = 0; n < 5; ++n) {
             for (unsigned m = 0; m < 8; m += 4) {
-                const unsigned scale_index = (group * 40 + n * 8 + m) / 32;
+                const unsigned scale_index = geniex_ptq1_qs_activation_index(group, n, m) / 32;
                 geniex_ptq1_accumulate(
                     tile->qs[group * 8 + m], powers[n], &activation->qs[group][n][m / 4], acc[scale_index]);
             }

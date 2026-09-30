@@ -27,10 +27,11 @@ static int dot_with_index(const ptq1_block *block) {
     int            sum       = 0;
     unsigned       index     = 0;
 
-    for (unsigned group = 0; group < 3; ++group) {
-        const unsigned offset = group * 8;
+    for (unsigned stage = 0; stage < 2; ++stage) {
+        const unsigned width = stage == 0 ? 16 : 8;
+        const unsigned offset = stage == 0 ? 0 : 16;
         for (unsigned n = 0; n < 5; ++n) {
-            for (unsigned m = 0; m < 8; ++m) {
+            for (unsigned m = 0; m < width; ++m) {
                 sum += trit(block->qs[offset + m], powers[n]) * (int)++index;
             }
         }
@@ -48,10 +49,12 @@ static int dot_reference(const ptq1_block *block, const int8_t *activation) {
     int            sum       = 0;
     unsigned       index     = 0;
 
-    for (unsigned group = 0; group < 3; ++group) {
+    for (unsigned stage = 0; stage < 2; ++stage) {
+        const unsigned width = stage == 0 ? 16 : 8;
+        const unsigned offset = stage == 0 ? 0 : 16;
         for (unsigned n = 0; n < 5; ++n) {
-            for (unsigned m = 0; m < 8; ++m) {
-                sum += trit(block->qs[group * 8 + m], powers[n]) * activation[index++];
+            for (unsigned m = 0; m < width; ++m) {
+                sum += trit(block->qs[offset + m], powers[n]) * activation[index++];
             }
         }
     }
@@ -76,10 +79,12 @@ static float dot_reference_scaled(const ptq1_block *block, const int8_t *activat
     int32_t        partial[4] = {0};
     unsigned       index      = 0;
 
-    for (unsigned group = 0; group < 3; ++group) {
+    for (unsigned stage = 0; stage < 2; ++stage) {
+        const unsigned width = stage == 0 ? 16 : 8;
+        const unsigned offset = stage == 0 ? 0 : 16;
         for (unsigned n = 0; n < 5; ++n) {
-            for (unsigned m = 0; m < 8; ++m) {
-                partial[index / 32] += trit(block->qs[group * 8 + m], powers[n]) * activation[index];
+            for (unsigned m = 0; m < width; ++m) {
+                partial[index / 32] += trit(block->qs[offset + m], powers[n]) * activation[index];
                 ++index;
             }
         }
@@ -99,10 +104,12 @@ static void dot_tiled(const ptq1_tile *restrict tile, const int8_t *restrict act
     unsigned       index     = 0;
 
     for (unsigned row = 0; row < TILE_ROWS; ++row) sums[row] = 0;
-    for (unsigned group = 0; group < 3; ++group) {
+    for (unsigned stage = 0; stage < 2; ++stage) {
+        const unsigned width = stage == 0 ? 16 : 8;
+        const unsigned offset = stage == 0 ? 0 : 16;
         for (unsigned n = 0; n < 5; ++n) {
-            for (unsigned m = 0; m < 8; ++m) {
-                const uint8_t *codes = tile->qs[group * 8 + m];
+            for (unsigned m = 0; m < width; ++m) {
+                const uint8_t *codes = tile->qs[offset + m];
                 const int      a     = activation[index++];
                 for (unsigned row = 0; row < TILE_ROWS; ++row) {
                     sums[row] += trit(codes[row], powers[n]) * a;
@@ -150,11 +157,11 @@ int main(void) {
     ptq1_block block = {.d = 0x3c00};                     // FP16 scale 1.0
     for (unsigned i = 0; i < 24; ++i) block.qs[i] = 128;  // zero trits
     for (unsigned i = 0; i < 2; ++i) block.qh[i] = 128;
-    block.qs[0] = 255;  // +1 at indices 1, 9, 17, 25, 33
+    block.qs[0] = 255;  // +1 at one-based indices 1, 17, 33, 49, 65
     block.qh[0] = 0;    // -1 at indices 121, 123, 125, 127
 
     const int actual = dot_with_index(&block);
-    if (actual != -411 || sizeof(block) != 28) return 1;
+    if (actual != -331 || sizeof(block) != 28) return 1;
 
     ptq1_block blocks[TILE_ROWS];
     ptq1_tile  tile;

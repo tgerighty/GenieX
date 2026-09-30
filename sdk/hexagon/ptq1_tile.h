@@ -65,4 +65,49 @@ static inline void geniex_ptq1_unpack_tile(
     }
 }
 
-#endif
+#ifdef __hexagon__
+// DSP-only dequantization; host code uses the packing helpers above.
+static inline float geniex_ptq1_fp16_to_fp32(uint16_t h) {
+    union { uint16_t bits; _Float16 value; } half;
+    half.bits = h;
+    return (float) half.value;
+}
+
+static inline int geniex_ptq1_trit(uint8_t packed, unsigned power) {
+    const uint8_t shifted = (uint8_t)(packed * (uint8_t)power);
+    return (int)(((unsigned)shifted * 3u) >> 8) - 1;
+}
+
+// Prism qs traversal is a 16-byte stage then an 8-byte stage (not 8/8/8).
+static inline void geniex_ptq1_dequant_tile_row(float *y, const geniex_ptq1_tile *tile, unsigned row) {
+    static const unsigned powers[5] = {1, 3, 9, 27, 81};
+    const float d = geniex_ptq1_fp16_to_fp32(tile->d[row]);
+    unsigned out = 0;
+
+    for (unsigned stage = 0; stage < 2; ++stage) {
+        const unsigned width  = stage == 0 ? 16u : 8u;
+        const unsigned offset = stage == 0 ? 0u : 16u;
+        for (unsigned n = 0; n < 5; ++n) {
+            for (unsigned m = 0; m < width; ++m) {
+                y[out++] = (float)geniex_ptq1_trit(tile->qs[offset + m][row], powers[n]) * d;
+            }
+        }
+    }
+    for (unsigned n = 0; n < 4; ++n) {
+        for (unsigned h = 0; h < 2; ++h) {
+            y[out++] = (float)geniex_ptq1_trit(tile->qh[h][row], powers[n]) * d;
+        }
+    }
+    assert(out == GENIEX_PTQ1_BLOCK_K);
+}
+
+// Repacked layout: tile-row major, then K blocks. tiles points at tile-row ct.
+static inline void geniex_ptq1_dequant_repacked_row(
+    float *y, const geniex_ptq1_tile *tiles, uint32_t n_k_tiles, unsigned row_in_tile) {
+    for (uint32_t kt = 0; kt < n_k_tiles; ++kt) {
+        geniex_ptq1_dequant_tile_row(y + (size_t)kt * GENIEX_PTQ1_BLOCK_K, &tiles[kt], row_in_tile);
+    }
+}
+
+#endif  // __hexagon__
+#endif  // GENIEX_PTQ1_TILE_H
