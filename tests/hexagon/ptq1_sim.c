@@ -363,6 +363,18 @@ int main(void) {
     }
     if (pair0[TILE_ROWS - 1] != 12345.0f || pair1[TILE_ROWS - 2] != 12345.0f || pair1[TILE_ROWS - 1] != 12345.0f)
         return 1;
+    static geniex_ptq1_activation cached_activations[2];
+    for (unsigned block = 0; block < 2; ++block)
+        geniex_ptq1_prepare_activation(&cached_activations[block], (const int8_t *)flat_q8 + block * 128);
+    for (unsigned row = 0; row < TILE_ROWS; ++row) pair0[row] = pair1[row] = 12345.0f;
+    geniex_ptq1_dot_pair_flat_q8(
+        256, pair0, pair1, two_tiles, two_tiles, flat_q8, TILE_ROWS - 1, TILE_ROWS - 2, NULL, cached_activations);
+    for (unsigned row = 0; row < TILE_ROWS - 1; ++row) {
+        if (pair0[row] != hvx_outputs[row]) return 1;
+        if (row < TILE_ROWS - 2 && pair1[row] != hvx_outputs[row]) return 1;
+    }
+    if (pair0[TILE_ROWS - 1] != 12345.0f || pair1[TILE_ROWS - 2] != 12345.0f || pair1[TILE_ROWS - 1] != 12345.0f)
+        return 1;
 #endif
 #endif
     printf("PTQ1_0 tile: 32 rows match CPU reference\n");

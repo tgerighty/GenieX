@@ -681,7 +681,7 @@ index 6c39366..d6502fd 100644
 +                    if (((ne10 == 5120 || ne10 == 6144) && src1_nrows > 8 && src1_nrows <= 512) || (ne10 == 17408 && src1_nrows > 4 && src1_nrows <= 128)) {
 +                        dst_size_per_thread += (size_t) src1_nrows * (ne10 == 17408 ? 544 : 192) * sizeof(float);
 +                    }
-+                    if (ne10 == 5120 && src1_nrows == 1 && dst_size_per_thread == quant_scratch_size_per_thread) {
++                    if (ne10 == 5120 && src1_nrows == 1 && dst_row_size > (size_t) n_threads * 96 * sizeof(float) && dst_size_per_thread == quant_scratch_size_per_thread) {
 +                        dst_size_per_thread += HTP_MM_PTQ1_ACT_CACHE_SIZE;
 +                    }
 +                    dst_size_per_thread += HTP_MM_PTQ1_ACT_SCRATCH_SIZE;

@@ -13,7 +13,7 @@ static void check_rows(uint32_t rows, uint32_t threads) {
     const size_t output_bytes = worker_rows * sizeof(float);
     const size_t quant_bytes = htp_mm_round_up(k * sizeof(float), QK_Q8_0_TILED * sizeof(float));
     /* Cache only while per-worker output still fits in quant scratch (excludes output head). */
-    const size_t cache_bytes = output_bytes <= quant_bytes ? HTP_MM_PTQ1_ACT_CACHE_SIZE : 0;
+    const size_t cache_bytes = worker_rows >= 128 && output_bytes <= quant_bytes ? HTP_MM_PTQ1_ACT_CACHE_SIZE : 0;
     struct htp_mm_hvx_vtcm_layout layout;
 
     htp_mm_hvx_vtcm_layout_build(&layout, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT,
@@ -122,11 +122,11 @@ static void check_act_cache_bounds(void) {
     struct htp_mm_hvx_vtcm_layout layout;
     const size_t quant_bytes = htp_mm_round_up(k * sizeof(float), QK_Q8_0_TILED * sizeof(float));
 
-    /* Active path: K5120 M1 with output inside quant scratch. */
+    /* Small per-worker spans must not reserve an unused full-K cache. */
     htp_mm_hvx_vtcm_layout_build(&layout, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT,
         HTP_TYPE_PTQ1_0, k, 1, threads, 81 * sizeof(float), 1120, k * sizeof(float), 0, 2,
         false, false, false);
-    assert(layout.dst_bytes / threads == quant_bytes + HTP_MM_PTQ1_ACT_CACHE_SIZE + HTP_MM_PTQ1_ACT_SCRATCH_SIZE);
+    assert(layout.dst_bytes / threads == quant_bytes + HTP_MM_PTQ1_ACT_SCRATCH_SIZE);
     assert(layout.src0_bytes == threads * 2 * (k / 128) * HTP_MM_WEIGHT_TILE_SIZE_PTQ1_0);
     assert(layout.total_bytes <= 8 * 1024 * 1024);
 
@@ -146,6 +146,12 @@ int main(void) {
     assert(248320 <= coarse_limit);
     check_rows(1, 8);
     check_rows(33, 8);
+    check_rows(97, 8);
+    check_rows(273, 8);
+    check_rows(768, 8);
+    check_rows(769, 8);
+    check_rows(40960, 8);
+    check_rows(40961, 8);
     check_rows(248320, 8);
     check_rows(248321, 8);
     check_rows(coarse_limit, 8);
