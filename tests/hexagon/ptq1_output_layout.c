@@ -12,20 +12,22 @@ static void check_rows(uint32_t rows, uint32_t threads) {
     const size_t worker_rows = hex_round_up((rows + threads - 1) / threads, 32);
     const size_t output_bytes = worker_rows * sizeof(float);
     const size_t quant_bytes = htp_mm_round_up(k * sizeof(float), QK_Q8_0_TILED * sizeof(float));
+    /* Cache only while per-worker output still fits in quant scratch (excludes output head). */
+    const size_t cache_bytes = output_bytes <= quant_bytes ? HTP_MM_PTQ1_ACT_CACHE_SIZE : 0;
     struct htp_mm_hvx_vtcm_layout layout;
 
     htp_mm_hvx_vtcm_layout_build(&layout, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT,
         HTP_TYPE_PTQ1_0, k, 1, threads, row_bytes, 1120, k * sizeof(float), 0, 2,
         false, false, false);
 
-    assert(layout.dst_bytes / threads == MAX(output_bytes, quant_bytes) + HTP_MM_PTQ1_ACT_SCRATCH_SIZE);
+    assert(layout.dst_bytes / threads == MAX(output_bytes, quant_bytes) + cache_bytes + HTP_MM_PTQ1_ACT_SCRATCH_SIZE);
     assert(layout.src0_bytes == threads * 2 * (k / 128) * HTP_MM_WEIGHT_TILE_SIZE_PTQ1_0);
     for (uint32_t ith = 0; ith < threads; ++ith) {
         const size_t first = worker_rows * ith;
         const size_t last = MIN(first + worker_rows, rows);
         if (first >= rows) continue;
         assert(last - first <= output_bytes / sizeof(float));
-        assert((last - first) * sizeof(float) <= layout.dst_bytes / threads - HTP_MM_PTQ1_ACT_SCRATCH_SIZE);
+        assert((last - first) * sizeof(float) <= layout.dst_bytes / threads - HTP_MM_PTQ1_ACT_SCRATCH_SIZE - cache_bytes);
     }
     if (rows <= 248321) assert(layout.total_bytes <= 8 * 1024 * 1024);
     else assert(layout.total_bytes > 8 * 1024 * 1024);
@@ -114,6 +116,30 @@ static void check_prefill_scratch(void) {
     assert(layout.total_bytes <= 8 * 1024 * 1024);
 }
 
+static void check_act_cache_bounds(void) {
+    const uint32_t threads = 8;
+    const uint32_t k = 5120;
+    struct htp_mm_hvx_vtcm_layout layout;
+    const size_t quant_bytes = htp_mm_round_up(k * sizeof(float), QK_Q8_0_TILED * sizeof(float));
+
+    /* Active path: K5120 M1 with output inside quant scratch. */
+    htp_mm_hvx_vtcm_layout_build(&layout, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT,
+        HTP_TYPE_PTQ1_0, k, 1, threads, 81 * sizeof(float), 1120, k * sizeof(float), 0, 2,
+        false, false, false);
+    assert(layout.dst_bytes / threads == quant_bytes + HTP_MM_PTQ1_ACT_CACHE_SIZE + HTP_MM_PTQ1_ACT_SCRATCH_SIZE);
+    assert(layout.src0_bytes == threads * 2 * (k / 128) * HTP_MM_WEIGHT_TILE_SIZE_PTQ1_0);
+    assert(layout.total_bytes <= 8 * 1024 * 1024);
+
+    /* Inactive path: output head keeps the pre-cache layout. */
+    htp_mm_hvx_vtcm_layout_build(&layout, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT,
+        HTP_TYPE_PTQ1_0, k, 1, threads, 248320 * sizeof(float), 1120, k * sizeof(float), 0, 2,
+        false, false, false);
+    const size_t head_output = hex_round_up((248320 + threads - 1) / threads, 32) * sizeof(float);
+    assert(head_output > quant_bytes);
+    assert(layout.dst_bytes / threads == head_output + HTP_MM_PTQ1_ACT_SCRATCH_SIZE);
+    assert(layout.total_bytes <= 8 * 1024 * 1024);
+}
+
 int main(void) {
     const uint32_t coarse_limit = (8 * 1024 * 1024) / sizeof(float);
     assert(coarse_limit == 2097152);
@@ -128,6 +154,7 @@ int main(void) {
     check_partial_output(33);
     check_partial_output(81);
     check_prefill_scratch();
+    check_act_cache_bounds();
     puts("PTQ1 output layout passed");
     return 0;
 }

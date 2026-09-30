@@ -270,7 +270,7 @@ int main(void) {
     float                  pair[2][TILE_ROWS];
     for (unsigned ct = 0; ct < WEIGHT_TILES; ct += 2) {
         geniex_ptq1_dot_pair_flat_q8(
-            K, pair[0], pair[1], weights[ct], weights[ct + 1], flat_q8, TILE_ROWS, TILE_ROWS, &prepared);
+            K, pair[0], pair[1], weights[ct], weights[ct + 1], flat_q8, TILE_ROWS, TILE_ROWS, &prepared, NULL);
         checksum += pair[0][ct] + pair[1][ct + 1];
     }
 #else
@@ -356,7 +356,7 @@ int main(void) {
     float pair1[TILE_ROWS];
     for (unsigned row = 0; row < TILE_ROWS; ++row) pair0[row] = pair1[row] = 12345.0f;
     geniex_ptq1_dot_pair_flat_q8(
-        256, pair0, pair1, two_tiles, two_tiles, flat_q8, TILE_ROWS - 1, TILE_ROWS - 2, &prepared);
+        256, pair0, pair1, two_tiles, two_tiles, flat_q8, TILE_ROWS - 1, TILE_ROWS - 2, &prepared, NULL);
     for (unsigned row = 0; row < TILE_ROWS - 1; ++row) {
         if (pair0[row] != hvx_outputs[row]) return 1;
         if (row < TILE_ROWS - 2 && pair1[row] != hvx_outputs[row]) return 1;
