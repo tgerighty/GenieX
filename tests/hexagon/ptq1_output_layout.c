@@ -140,7 +140,35 @@ static void check_act_cache_bounds(void) {
     assert(layout.total_bytes <= 8 * 1024 * 1024);
 }
 
+#ifdef PTQ1_FFN_LAYOUT_CHECK
+static void check_ffn_layout(void) {
+    const uint32_t rows[] = {1, 33, 256, 257, 273, 5120, 17408};
+    const uint32_t threads[] = {1, 8};
+    for (unsigned ti = 0; ti < 2; ++ti) {
+        for (unsigned ni = 0; ni < sizeof(rows) / sizeof(rows[0]); ++ni) {
+            struct htp_mm_hvx_vtcm_layout L;
+            const uint32_t nth = threads[ti];
+            const uint32_t worker_rows = hex_round_up((rows[ni] + nth - 1) / nth, 32);
+            htp_mm_hvx_vtcm_layout_build(&L, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT,
+                HTP_TYPE_PTQ1_0, 5120, 1, nth, rows[ni] * sizeof(float), 1120,
+                htp_mm_q8_0_flat_row_size(5120), 0, 2, false, false, true);
+            assert(L.src0_bytes == nth * 2 * 40 * HTP_MM_WEIGHT_TILE_SIZE_PTQ1_0);
+            assert(L.src2_bytes == L.src0_bytes && L.src3_bytes == 0);
+            const size_t cache = worker_rows > 32 ? HTP_MM_PTQ1_ACT_CACHE_SIZE : 0;
+            assert(L.dst_bytes == nth * (20480 + HTP_MM_PTQ1_ACT_SCRATCH_SIZE + cache));
+            assert(L.off_src0 + L.src0_bytes <= L.off_src2);
+            assert(L.off_src2 + L.src2_bytes <= L.off_dst);
+            assert(L.off_dst + L.dst_bytes <= L.total_bytes);
+            assert(L.total_bytes <= 8 * 1024 * 1024);
+        }
+    }
+}
+#endif
+
 int main(void) {
+#ifdef PTQ1_FFN_LAYOUT_CHECK
+    check_ffn_layout();
+#endif
     const uint32_t coarse_limit = (8 * 1024 * 1024) / sizeof(float);
     assert(coarse_limit == 2097152);
     assert(248320 <= coarse_limit);
