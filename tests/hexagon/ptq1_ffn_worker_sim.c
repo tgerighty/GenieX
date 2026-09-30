@@ -42,6 +42,7 @@ bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void *data, un
 #ifndef PTQ1_WORKER_N
 #define PTQ1_WORKER_N 256
 #endif
+#include "ptq1_bench_batch.h"
 
 /* The scalar reference and serial quantization shim are M1-only. */
 _Static_assert(PTQ1_WORKER_M == 1, "PTQ1 FFN fixture supports M1 only");
@@ -151,6 +152,62 @@ static int check_outputs(const geniex_ptq1_tile weights[TILES][KB], float output
     }
     return 0;
 }
+
+#if PTQ1_BENCH_BATCH
+struct ptq1_ffn_batch_ctx {
+    struct htp_ops_context *octx;
+    struct htp_tensor *w_gate;
+    struct htp_tensor *w_up;
+    struct htp_tensor *x;
+    struct htp_tensor *y_gate;
+    struct htp_tensor *y_up;
+};
+
+static int ptq1_ffn_batch_op(void *p) {
+    struct ptq1_ffn_batch_ctx *b = (struct ptq1_ffn_batch_ctx *)p;
+    struct htp_ops_context *octx = b->octx;
+#if PTQ1_FFN_FUSED
+    octx->src[0] = b->w_gate;
+    octx->src[1] = b->x;
+    octx->src[2] = b->w_up;
+    octx->dsts[0] = b->y_gate;
+    octx->dsts[1] = b->y_up;
+    if (op_matmul_ffn(octx) != HTP_STATUS_OK) return 2;
+#else
+    octx->src[0] = b->w_gate;
+    octx->src[1] = b->x;
+    octx->src[2] = NULL;
+    octx->dst = b->y_gate;
+    if (hvx_mm_matmul(octx) != HTP_STATUS_OK) return 2;
+    octx->src[0] = b->w_up;
+    octx->src[1] = b->x;
+    octx->src[2] = NULL;
+    octx->dst = b->y_up;
+    if (hvx_mm_matmul(octx) != HTP_STATUS_OK) return 2;
+#endif
+    return 0;
+}
+
+static uint64_t ptq1_ffn_output_hash(void) {
+    uint64_t hash = UINT64_C(14695981039346656037);
+    const uint8_t *gate_bytes = (const uint8_t *)outputs_gate;
+    const uint8_t *up_bytes = (const uint8_t *)outputs_up;
+    for (size_t i = 0; i < sizeof(outputs_gate); ++i) {
+        hash = (hash ^ gate_bytes[i]) * UINT64_C(1099511628211);
+    }
+    for (size_t i = 0; i < sizeof(outputs_up); ++i) {
+        hash = (hash ^ up_bytes[i]) * UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static int ptq1_ffn_vtcm_canary(size_t total_bytes) {
+    for (unsigned i = 0; i < 128; ++i) {
+        if (vtcm[total_bytes + i] != 0xa5) return 3;
+    }
+    return 0;
+}
+#endif
 
 int main(void) {
     fill_blocks(blocks_gate, 7u, 0);
@@ -280,6 +337,35 @@ int main(void) {
     return 0;
 #endif
 
+#if PTQ1_BENCH_BATCH
+    unsigned long long repeat1_cycles = 0;
+    unsigned long long repeat4_cycles = 0;
+    uint64_t batch_hash = 0;
+    {
+        struct ptq1_ffn_batch_ctx batch = {
+            .octx = &octx,
+            .w_gate = &w_gate,
+            .w_up = &w_up,
+            .x = &x,
+            .y_gate = &y_gate,
+            .y_up = &y_up,
+        };
+        int st = ptq1_ffn_batch_op(&batch);
+        if (st != 0) return st;
+        st = ptq1_bench_batch_measure(ptq1_ffn_batch_op, &batch, PTQ1_BENCH_BATCH_REPEAT1,
+                                      &repeat1_cycles);
+        if (st != 0) return st;
+        st = ptq1_ffn_vtcm_canary(layout.total_bytes);
+        if (st != 0) return st;
+        batch_hash = ptq1_ffn_output_hash();
+        st = ptq1_bench_batch_measure(ptq1_ffn_batch_op, &batch, PTQ1_BENCH_BATCH_REPEAT4,
+                                      &repeat4_cycles);
+        if (st != 0) return st;
+        st = ptq1_ffn_vtcm_canary(layout.total_bytes);
+        if (st != 0) return st;
+        if (ptq1_ffn_output_hash() != batch_hash) return 11;
+    }
+#else
     for (unsigned repeat = 0; repeat < PTQ1_WORKER_REPEATS; ++repeat) {
 #if PTQ1_FFN_FUSED
         octx.src[0] = &w_gate;
@@ -302,6 +388,7 @@ int main(void) {
         if (hvx_mm_matmul(&octx) != HTP_STATUS_OK) return 2;
 #endif
     }
+#endif
 
     for (unsigned i = 0; i < 128; ++i) {
         if (vtcm[layout.total_bytes + i] != 0xa5) return 3;
@@ -315,7 +402,12 @@ int main(void) {
 
 #if PTQ1_FFN_COUNT_QUANT
     {
+#if PTQ1_BENCH_BATCH
+        const unsigned ops_per_repeat = PTQ1_FFN_FUSED ? 1u : 2u;
+        const unsigned expected = ops_per_repeat * PTQ1_BENCH_BATCH_OP_CALLS;
+#else
         const unsigned expected = PTQ1_FFN_FUSED ? PTQ1_WORKER_REPEATS : (2u * PTQ1_WORKER_REPEATS);
+#endif
         if (ptq1_ffn_flat_quant_calls != expected) {
             printf("PTQ1 FFN flat quant calls %u expected %u\n",
                    ptq1_ffn_flat_quant_calls, expected);
@@ -348,5 +440,9 @@ int main(void) {
     printf(" flat_quant_calls %u", ptq1_ffn_flat_quant_calls);
 #endif
     printf(" fused=%d worker_slices=%d\n", PTQ1_FFN_FUSED, PTQ1_WORKER_THREADS);
+#if PTQ1_BENCH_BATCH
+    if (hash != batch_hash) return 11;
+    ptq1_bench_batch_report(repeat1_cycles, repeat4_cycles);
+#endif
     return 0;
 }

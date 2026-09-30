@@ -23,6 +23,7 @@ bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void *data, un
 #ifndef PTQ1_HALF_EXHAUSTIVE
 #define PTQ1_HALF_EXHAUSTIVE 0
 #endif
+#include "ptq1_bench_batch.h"
 enum { K = PTQ1_WORKER_K, M = PTQ1_WORKER_M, N = PTQ1_WORKER_N,
     ROW_STRIDE = N + 16, TILES = (N + 31) / 32, KB = K / GENIEX_PTQ1_BLOCK_K };
 
@@ -86,6 +87,29 @@ static float scalar_dot(unsigned ct, unsigned row, const uint8_t *q8) {
     return total;
 }
 
+#if PTQ1_BENCH_BATCH
+static int ptq1_worker_batch_op(void *p) {
+    if (hvx_mm_matmul((struct htp_ops_context *)p) != HTP_STATUS_OK) return 2;
+    return 0;
+}
+
+static uint64_t ptq1_worker_output_hash(void) {
+    uint64_t hash = UINT64_C(14695981039346656037);
+    const uint8_t *output_bytes = (const uint8_t *)outputs;
+    for (size_t i = 0; i < sizeof(outputs); ++i) {
+        hash = (hash ^ output_bytes[i]) * UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static int ptq1_worker_vtcm_canary(const struct htp_mm_hvx_vtcm_layout *layout) {
+    for (unsigned i = 0; i < 128; ++i) {
+        if (vtcm[layout->total_bytes + i] != 0xa5) return 3;
+    }
+    return 0;
+}
+#endif
+
 int main(void) {
 #if PTQ1_HALF_EXHAUSTIVE
     if (check_half_conversion()) return 8;
@@ -139,9 +163,31 @@ int main(void) {
     ctx.vtcm_base = vtcm;
     ctx.vtcm_size = layout.total_bytes;
     ctx.dma[0] = dma_queue_init(queue_storage, 8, (uintptr_t)(vtcm + layout.off_src0), layout.src0_bytes, &ctx.trace[0]);
+#if PTQ1_BENCH_BATCH
+    unsigned long long repeat1_cycles = 0;
+    unsigned long long repeat4_cycles = 0;
+    uint64_t batch_hash = 0;
+    {
+        int st = ptq1_worker_batch_op(&octx);
+        if (st != 0) return st;
+        st = ptq1_bench_batch_measure(ptq1_worker_batch_op, &octx, PTQ1_BENCH_BATCH_REPEAT1,
+                                      &repeat1_cycles);
+        if (st != 0) return st;
+        st = ptq1_worker_vtcm_canary(&layout);
+        if (st != 0) return st;
+        batch_hash = ptq1_worker_output_hash();
+        st = ptq1_bench_batch_measure(ptq1_worker_batch_op, &octx, PTQ1_BENCH_BATCH_REPEAT4,
+                                      &repeat4_cycles);
+        if (st != 0) return st;
+        st = ptq1_worker_vtcm_canary(&layout);
+        if (st != 0) return st;
+        if (ptq1_worker_output_hash() != batch_hash) return 11;
+    }
+#else
     for (unsigned repeat = 0; repeat < PTQ1_WORKER_REPEATS; ++repeat) {
         if (hvx_mm_matmul(&octx) != HTP_STATUS_OK) return 2;
     }
+#endif
     for (unsigned i = 0; i < 128; ++i) if (vtcm[layout.total_bytes + i] != 0xa5) return 3;
     float checksum = 0.0f;
     for (unsigned ir = 0; ir < M; ++ir) {
@@ -169,5 +215,9 @@ int main(void) {
     }
     printf("PTQ1 worker K=%d M=%d repeats=%d checksum %.1f hash %016llx\n",
         K, M, PTQ1_WORKER_REPEATS, checksum, (unsigned long long)hash);
+#if PTQ1_BENCH_BATCH
+    if (hash != batch_hash) return 11;
+    ptq1_bench_batch_report(repeat1_cycles, repeat4_cycles);
+#endif
     return 0;
 }
