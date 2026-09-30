@@ -5,6 +5,18 @@ set -euo pipefail
 
 prism_htp=${1:?pass the Prism llama.cpp checkout path}
 prism_htp=$prism_htp/ggml/src/ggml-hexagon/htp
+if [[ ${2:-} == --ffn-worker && -z ${PTQ1_WORKER_N:-} ]]; then
+    want_reject=${PTQ1_FFN_REJECT_CHECK:-0}
+    for n in 256 1 33 81 97 129 257 273; do
+        PTQ1_FFN_REJECT_CHECK=0 PTQ1_WORKER_N=$n PTQ1_WORKER_REPEATS=1 "$0" "${1}" --ffn-worker
+    done
+    PTQ1_FFN_REJECT_CHECK=0 PTQ1_WORKER_N=256 PTQ1_WORKER_REPEATS=4 "$0" "${1}" --ffn-worker
+    if [[ $want_reject == 1 && ${PTQ1_FFN_FUSED:-0} == 1 ]]; then
+        PTQ1_WORKER_N=256 PTQ1_WORKER_REPEATS=1 PTQ1_FFN_REJECT_CHECK=1 \
+            "$0" "${1}" --ffn-worker
+    fi
+    exit 0
+fi
 if [[ ${2:-} == --worker && -z ${PTQ1_WORKER_K:-} ]]; then
     PTQ1_WORKER_K=256 "$0" "${1}" --worker
     PTQ1_WORKER_K=5120 "$0" "${1}" --worker
@@ -37,7 +49,11 @@ trap 'rm -rf "$build_dir"' EXIT
 includes=(-I"$here/../../sdk/hexagon" -I"$prism_htp" -I"$sdk/incs" -I"$sdk/incs/stddef"
     -I"$sdk/rtos/qurt/computev75/include/qurt")
 flags=(-mcpu=v75 -mv75 -mhvx=v75 -mhmx -O2)
-"$tools/hexagon-clang" "${includes[@]}" "${flags[@]}" "$here/ptq1_output_layout.c" -o "$build_dir/layout.elf"
+layout_flags=()
+if [[ ${2:-} == --ffn-worker && ${PTQ1_FFN_FUSED:-0} == 1 ]]; then
+    layout_flags=(-DPTQ1_FFN_LAYOUT_CHECK)
+fi
+"$tools/hexagon-clang" "${includes[@]}" "${flags[@]}" "${layout_flags[@]}" "$here/ptq1_output_layout.c" -o "$build_dir/layout.elf"
 "$tools/hexagon-sim" --march v75na_1 -r "$build_dir/layout.elf" | grep -Fx 'PTQ1 output layout passed'
 "$tools/hexagon-clang" "${includes[@]}" "${flags[@]}" -fpic -c "$prism_htp/dma-queue.c" -o "$build_dir/queue.o"
 
@@ -60,6 +76,42 @@ if [[ ${2:-} == --worker ]]; then
     grep -F "PTQ1 worker K=$worker_k M=$worker_m repeats=$worker_repeats checksum " <<< "$output"
     if [[ ${PTQ1_HALF_EXHAUSTIVE:-0} == 1 ]]; then grep -Fx 'PTQ1 half exhaustive passed' <<< "$output"; fi
     grep -F 'Total: Insns=' <<< "$output"
+    exit 0
+fi
+
+if [[ ${2:-} == --ffn-worker ]]; then
+    worker_k=${PTQ1_WORKER_K:-5120}
+    worker_m=${PTQ1_WORKER_M:-1}
+    worker_n=${PTQ1_WORKER_N:-256}
+    worker_repeats=${PTQ1_WORKER_REPEATS:-1}
+    fused=${PTQ1_FFN_FUSED:-0}
+    count_quant=${PTQ1_FFN_COUNT_QUANT:-1}
+    reject_check=${PTQ1_FFN_REJECT_CHECK:-0}
+    includes+=(-I"$prism_htp/.." -I"$prism_htp/../..")
+    if [[ $count_quant == 1 ]]; then
+        # Copy unchanged source so its quoted header lookup reaches the test wrapper.
+        cp "$prism_htp/matmul-ops.c" "$build_dir/matmul-ops.c"
+        includes=("-I$build_dir" "-I$here/ptq1_ffn_quant_wrap" "${includes[@]}")
+    fi
+    "$tools/hexagon-clang" "${includes[@]}" "${flags[@]}" -fpic -ffunction-sections -fdata-sections \
+        -DPTQ1_WORKER_K="$worker_k" -DPTQ1_WORKER_M="$worker_m" -DPTQ1_WORKER_N="$worker_n" \
+        -DPTQ1_WORKER_REPEATS="$worker_repeats" -DPTQ1_FFN_FUSED="$fused" \
+        -DPTQ1_WORKER_THREADS="${PTQ1_WORKER_THREADS:-1}" \
+        -DPTQ1_FFN_COUNT_QUANT="$count_quant" -DPTQ1_FFN_REJECT_CHECK="$reject_check" \
+        -c "$here/ptq1_ffn_worker_sim.c" -o "$build_dir/ffn_worker.o"
+    "$tools/hexagon-clang" "${flags[@]}" -Wl,--gc-sections \
+        "$build_dir/ffn_worker.o" "$build_dir/queue.o" -lm -o "$build_dir/ffn_worker.elf"
+    if ! output=$("$tools/hexagon-sim" --march v75na_1 -r "$build_dir/ffn_worker.elf" 2>&1); then
+        printf '%s\n' "$output" >&2
+        exit 1
+    fi
+    if [[ $reject_check == 1 ]]; then
+        grep -Fx 'PTQ1 FFN reject check passed' <<< "$output"
+    else
+        grep -F "PTQ1 FFN worker K=$worker_k M=$worker_m N=$worker_n repeats=$worker_repeats checksum " <<< "$output"
+    fi
+    grep -F 'Total: Insns=' <<< "$output"
+    grep -F 'Pcycles=' <<< "$output"
     exit 0
 fi
 
