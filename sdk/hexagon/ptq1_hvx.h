@@ -92,6 +92,13 @@ static inline void geniex_ptq1_accumulate(
     sums[1]                       = Q6_Vh_vmpyiacc_VhVhVh(sums[1], hi, activation->hi);
 }
 
+static inline HVX_Vector geniex_ptq1_decode_next(HVX_Vector *state) {
+    // State is 0..255; its triple is 0..765 and fits signed int16.
+    const HVX_Vector triple = Q6_Vh_vadd_VhVh(*state, Q6_Vh_vasl_VhR(*state, 1));
+    *state = Q6_V_vand_VV(triple, Q6_Vh_vsplat_R(255));
+    return Q6_Vh_vsub_VhVh(Q6_Vh_vasr_VhR(triple, 8), Q6_Vh_vsplat_R(1));
+}
+
 static inline void geniex_ptq1_dot_tile(
     const geniex_ptq1_tile *tile, const geniex_ptq1_activation *activation, const float scales[4], float *outputs) {
     static const unsigned powers[5] = {1, 3, 9, 27, 81};
@@ -112,10 +119,16 @@ static inline void geniex_ptq1_dot_tile(
 #pragma clang loop unroll(full)
         for (unsigned m = 0; m < 8; m += 4) {
             const HVX_VectorPair products = Q6_Wuh_vunpack_Vub(*(const HVX_UVector *)tile->qs[group * 8 + m]);
+            HVX_Vector state_lo = Q6_V_lo_W(products);
+            HVX_Vector state_hi = Q6_V_hi_W(products);
 #pragma clang loop unroll(full)
             for (unsigned n = 0; n < 5; ++n) {
                 const unsigned scale_index = geniex_ptq1_qs_activation_index(group, n, m) / 32;
-                geniex_ptq1_accumulate(products, powers[n], &activation->qs[group][n][m / 4], acc[scale_index]);
+                const HVX_Vector lo = geniex_ptq1_decode_next(&state_lo);
+                const HVX_Vector hi = geniex_ptq1_decode_next(&state_hi);
+                const geniex_ptq1_act_pair *pair = &activation->qs[group][n][m / 4];
+                acc[scale_index][0] = Q6_Vh_vmpyiacc_VhVhVh(acc[scale_index][0], lo, pair->lo);
+                acc[scale_index][1] = Q6_Vh_vmpyiacc_VhVhVh(acc[scale_index][1], hi, pair->hi);
             }
         }
     }

@@ -147,6 +147,18 @@ static int verify_hvx_trits(void) {
             }
         }
     }
+    for (unsigned code = 0; code < 256; ++code) {
+        HVX_Vector state = Q6_Vh_vsplat_R(code);
+        for (unsigned p = 0; p < 5; ++p) {
+            *(HVX_Vector *)decoded = geniex_ptq1_decode_next(&state);
+            for (unsigned lane = 0; lane < 64; ++lane) {
+                if (decoded[lane] != trit((uint8_t)code, powers[p])) {
+                    printf("PTQ1_0 radix-state mismatch: code %u power %u lane %u\n", code, powers[p], lane);
+                    return 1;
+                }
+            }
+        }
+    }
     return 0;
 }
 #endif
