@@ -203,3 +203,32 @@ released18:27:37 with next ownerTensorFold. Receipts retained locally at
 /home/arduino/geniex-bonsai/gdn-snapshot-line-fix-r2-20261001.
 This is a correctness qualification, not a serving or speed measurement.
 Aligned S128 model routing remains unchanged. No new performance gain.
+
+## Review correction: repeated CMake configuration
+
+GitHub Codex identified a real build defect missed by the initial source and
+CodeRabbit reviews. After applying the snapshot patch, the earlier output-line
+patch no longer passes its reverse check. Its forward apply also fails.
+Actual SDK CMake reconfiguration reproduced exit1 at that patch.
+
+The correction checks the snapshot reverse state before the ordinary patch
+loop. If applied, it omits the superseded output-line patch. Fresh sources
+and PR60-patched sources keep their normal patch order. No kernel changes.
+Six real SDK configure runs passed: fresh, PR60 upgrade and fully patched,
+each first and repeat. Every run produced the exact board-tested GDN C SHA
+f5411a85. Manually partially patched states were not tested.
+Sol6 independently reviewed the correction and logs with no actionable finding.
+
+Controller /tmp/geniex-snapshot-idempotence-check-20261001.sh uses owned
+source/Prism/build copies on Plex with the existing SDK image. Logs retained
+locally at /tmp/geniex-snapshot-patch-check-20261001.2yPtzz/idempotence-*.log.
+Full ARM64/plugin/v73/v75/v79/v81 cross-build82113 completed0, verified18:50 UTC.
+Rebuilt host6f1c1319 andv75ed83c953 match the board-tested library bytes exactly.
+SDK CMake SHAec3235b9. CodeRabbitCLI62118 completed0 with findings0 across
+all six PR files, including the uncommitted correction. Reservation
+rsv_464969495db44997 is complete. Exact-head PR checks still follow the push.
+
+The first commit retained whitespace-only context in the new patch because
+shell command sequencing did not stop after the whitespace check failed.
+Commit5439b0aa removed that context. Current patchSHAaccefec5 produces exactly
+the same tested C SHAf5411a85. This process failure is also retained.
