@@ -307,7 +307,19 @@ int main(void) {
     for (unsigned k = 0; k < 128; ++k) {
         int8_t basis[128] = {0};
         basis[k]          = 1;
+#ifdef PTQ1_POISON_QH_HIGH
+        const HVX_Vector poison = Q6_Vh_vsplat_R(317);
+        for (unsigned n = 0; n < 4; ++n) prepared.qh[n].hi = poison;
+#endif
         geniex_ptq1_prepare_activation(&prepared, basis);
+#ifdef PTQ1_POISON_QH_HIGH
+        for (unsigned n = 0; n < 4; ++n) {
+            if (memcmp(&prepared.qh[n].hi, &poison, sizeof(poison)) != 0) {
+                printf("PTQ1_0 unused QH high-half was written at k %u group %u\n", k, n);
+                return 1;
+            }
+        }
+#endif
         geniex_ptq1_dot_tile(&tile, &prepared, unit_scales, hvx_outputs);
         for (unsigned row = 0; row < TILE_ROWS; ++row) {
             if (hvx_outputs[row] != dot_reference(&blocks[row], basis)) {

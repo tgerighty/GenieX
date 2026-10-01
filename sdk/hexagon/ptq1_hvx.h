@@ -37,7 +37,7 @@ static inline void geniex_ptq1_prepare_act_pair(
         for (unsigned row = 0; row < GENIEX_PTQ1_TILE_ROWS; ++row) lanes[m * GENIEX_PTQ1_TILE_ROWS + row] = value;
     }
     pair->lo = *(const HVX_Vector *)&lanes[0];
-    pair->hi = *(const HVX_Vector *)&lanes[64];
+    if (count > 2) pair->hi = *(const HVX_Vector *)&lanes[64];
 #else
     const HVX_VectorPred first = Q6_Q_vsetq_R(64);
     const HVX_Vector     a0    = Q6_Vh_vsplat_R(activation[offset]);
@@ -45,7 +45,7 @@ static inline void geniex_ptq1_prepare_act_pair(
     const HVX_Vector     a2    = Q6_Vh_vsplat_R(count > 2 ? activation[offset + 2] : 0);
     const HVX_Vector     a3    = Q6_Vh_vsplat_R(count > 2 ? activation[offset + 3] : 0);
     pair->lo                   = Q6_V_vmux_QVV(first, a0, a1);
-    pair->hi                   = Q6_V_vmux_QVV(first, a2, a3);
+    if (count > 2) pair->hi    = Q6_V_vmux_QVV(first, a2, a3);
 #endif
 }
 
@@ -135,7 +135,9 @@ static inline void geniex_ptq1_dot_tile(
     const HVX_VectorPair qh_products = Q6_Wuh_vunpack_Vub(*(const HVX_UVector *)tile->qh[0]);
 #pragma clang loop unroll(full)
     for (unsigned n = 0; n < 4; ++n) {
-        geniex_ptq1_accumulate(qh_products, powers[n], &activation->qh[n], acc[3]);
+        // QH has two activation lanes; its high half is unused scratch.
+        const HVX_Vector trit = geniex_ptq1_decode_trit(Q6_V_lo_W(qh_products), powers[n]);
+        acc[3][0] = Q6_Vh_vmpyiacc_VhVhVh(acc[3][0], trit, activation->qh[n].lo);
     }
 #ifdef PTQ1_SCALAR_REDUCE
     for (unsigned b = 0; b < 4; ++b) {
