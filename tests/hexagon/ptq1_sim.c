@@ -309,6 +309,44 @@ int main(void) {
         }
     }
     const float scales[4] = {0.5f, 1.0f, 2.0f, 4.0f};
+    {
+        // Constant ±extreme activations with all-ternary ±1 weights cover the
+        // int16 scale-group bound 32*128=4096 against an independent scalar oracle.
+        ptq1_block           saved_blocks[TILE_ROWS];
+        ptq1_tile            saved_tile;
+        int8_t               saved_activation[128];
+        static const int8_t  act_values[2]  = {-128, 127};
+        static const uint8_t pack_values[2] = {0, 255};
+
+        memcpy(saved_blocks, blocks, sizeof(blocks));
+        memcpy(&saved_tile, &tile, sizeof(tile));
+        memcpy(saved_activation, activation, sizeof(activation));
+        for (unsigned ai = 0; ai < 2; ++ai) {
+            for (unsigned k = 0; k < 128; ++k) activation[k] = act_values[ai];
+            geniex_ptq1_prepare_activation(&prepared, activation);
+            for (unsigned pi = 0; pi < 2; ++pi) {
+                for (unsigned row = 0; row < TILE_ROWS; ++row) {
+                    memset(blocks[row].qs, pack_values[pi], sizeof(blocks[row].qs));
+                    memset(blocks[row].qh, pack_values[pi], sizeof(blocks[row].qh));
+                    blocks[row].d = 0x3c00;
+                }
+                geniex_ptq1_pack_tile(&tile, blocks, 1, 0, TILE_ROWS);
+                geniex_ptq1_dot_tile(&tile, &prepared, scales, hvx_outputs);
+                for (unsigned row = 0; row < TILE_ROWS; ++row) {
+                    if (hvx_outputs[row] != dot_reference_scaled(&blocks[row], activation, scales)) {
+                        printf("PTQ1_0 HVX int16-bound mismatch act %d pack %u row %u\n",
+                            (int)act_values[ai],
+                            (unsigned)pack_values[pi],
+                            row);
+                        return 1;
+                    }
+                }
+            }
+        }
+        memcpy(blocks, saved_blocks, sizeof(blocks));
+        memcpy(&tile, &saved_tile, sizeof(tile));
+        memcpy(activation, saved_activation, sizeof(activation));
+    }
     for (unsigned row = 0; row < TILE_ROWS; ++row) {
         const uint16_t half_scales[3] = {0x3800, 0x3c00, 0x4000};
         blocks[row].d                 = half_scales[row % 3];
