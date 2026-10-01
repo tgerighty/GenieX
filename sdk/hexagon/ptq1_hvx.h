@@ -107,7 +107,9 @@ static inline void geniex_ptq1_dot_tile(
         for (unsigned m = 0; m < 2; ++m) acc[b][m] = Q6_V_vzero();
     }
 
+#pragma clang loop unroll(full)
     for (unsigned group = 0; group < 3; ++group) {
+#pragma clang loop unroll(full)
         for (unsigned m = 0; m < 8; m += 4) {
             const HVX_VectorPair products = Q6_Wuh_vunpack_Vub(*(const HVX_UVector *)tile->qs[group * 8 + m]);
 #pragma clang loop unroll(full)
