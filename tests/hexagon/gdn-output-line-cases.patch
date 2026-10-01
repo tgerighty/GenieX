@@ -1,0 +1,33 @@
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -10262,6 +10262,29 @@
+         }
+     }
+
++    // State output shares a 128-byte line with attention for unaligned sizes.
++    for (int64_t size : {3, 10, 31, 32, 33}) {
++        for (int64_t tokens : {1, 2, 3}) {
++            for (bool vector_gate : {false, true}) {
++                test_cases.emplace_back(new test_gated_delta_net(
++                    GGML_TYPE_F32, 3, size, tokens, 1, 1, false, vector_gate));
++                if (tokens == 3) {
++                    test_cases.emplace_back(new test_gated_delta_net(
++                        GGML_TYPE_F32, 3, size, tokens, 1, 1, false, vector_gate, 3));
++                }
++            }
++        }
++    }
++    for (bool vector_gate : {false, true}) {
++        test_cases.emplace_back(new test_gated_delta_net(
++            GGML_TYPE_F32, 3, 31, 2, 2, 1, false, vector_gate, 3));
++        test_cases.emplace_back(new test_gated_delta_net(
++            GGML_TYPE_F32, 3, 31, 3, 2, 1, false, vector_gate, 2));
++        test_cases.emplace_back(new test_gated_delta_net(
++            GGML_TYPE_F32, 5, 33, 2, 2, 1, false, vector_gate));
++        test_cases.emplace_back(new test_gated_delta_net(
++            GGML_TYPE_F32, 3, 3, 1, 2, 2, false, vector_gate));
++    }
+     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 1, 1));
+     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1));
+     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1, 1, true, true));
