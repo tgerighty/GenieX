@@ -26,6 +26,8 @@ run_one() {
         -DPTQ1_WORKER_K="$k" -DPTQ1_WORKER_M="$m" -DPTQ1_WORKER_N="$n" \
         -DPTQ1_WORKER_THREADS="$threads" -DPTQ1_WORKER_BIAS="$bias" \
         -DPTQ1_WORKER_VTCM_REJECT="$reject" \
+        -DPTQ1_WORKER_BATCH="${PTQ1_WORKER_BATCH:-0}" \
+        -DPTQ1_WORKER_PADDED_W="${PTQ1_WORKER_PADDED_W:-0}" \
         "$here/ptq1_multirow_worker_sim.c" -o "$build_dir/worker.o"
     "$tools/hexagon-clang" "${flags[@]}" -c "$htp/dma-queue.c" -o "$build_dir/queue.o" \
         "${includes[@]}" -fpic

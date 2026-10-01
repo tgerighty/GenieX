@@ -64,6 +64,12 @@ bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void * data, u
 #ifndef PTQ1_WORKER_VTCM_REJECT
 #define PTQ1_WORKER_VTCM_REJECT 0
 #endif
+#ifndef PTQ1_WORKER_BATCH
+#define PTQ1_WORKER_BATCH 0
+#endif
+#ifndef PTQ1_WORKER_PADDED_W
+#define PTQ1_WORKER_PADDED_W 0
+#endif
 
 enum {
     K          = PTQ1_WORKER_K,
@@ -188,8 +194,9 @@ int main(void) {
     struct htp_tensor w = {
         .data = (uint32_t) (uintptr_t) weights,
         .type = HTP_TYPE_PTQ1_0,
-        .ne   = {K, N, 1, 1},
-        .nb   = {28, KB * 28, N * KB * 28, N * KB * 28},
+        .ne   = {K, PTQ1_WORKER_PADDED_W ? TILES * 32 : N, 1, 1},
+        .nb   = {28, KB * 28, (PTQ1_WORKER_PADDED_W ? TILES * 32 : N) * KB * 28,
+            (PTQ1_WORKER_PADDED_W ? TILES * 32 : N) * KB * 28},
     };
     struct htp_tensor x = {
         .data = (uint32_t) (uintptr_t) activations,
@@ -223,12 +230,17 @@ int main(void) {
     };
     struct htp_mm_kernel_params * kparams = (struct htp_mm_kernel_params *) octx.kernel_params;
     kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT;
+#if PTQ1_WORKER_BATCH
+    // Real four-worker concurrency is covered on the board, not by this stub.
+    _Static_assert(NTHREADS == 1, "batch simulator needs one real quant task");
+    kparams->kernel_type = HTP_MM_KERNEL_HVX_PTQ1_BATCH;
+#endif
     kparams->n_prefetch  = 2;
 
     // Host-equivalent M1 VTCM layout even when M>1.
     struct htp_mm_hvx_vtcm_layout layout;
     htp_mm_hvx_vtcm_layout_build(
-        &layout, kparams->kernel_type, w.type, K, /*src1_nrows=*/1, NTHREADS, y.nb[1], w.nb[1],
+        &layout, kparams->kernel_type, w.type, K, PTQ1_WORKER_BATCH ? M : 1, NTHREADS, y.nb[1], w.nb[1],
         htp_mm_q8_0_flat_row_size(K), PTQ1_WORKER_BIAS ? b.nb[1] : 0, 2, false, false, false);
     if (layout.total_bytes + 128 > sizeof(vtcm)) {
         printf("PTQ1 multirow VTCM layout %zu exceeds fixture buffer\n", layout.total_bytes);
@@ -238,7 +250,7 @@ int main(void) {
     memset(vtcm, 0xa5, layout.total_bytes + 128);
     ctx.vtcm_base = vtcm;
 #if PTQ1_WORKER_VTCM_REJECT
-    ctx.vtcm_size = layout.total_bytes / 2;
+    ctx.vtcm_size = layout.total_bytes - 1;
 #else
     ctx.vtcm_size = layout.total_bytes;
 #endif
