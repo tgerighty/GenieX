@@ -1,0 +1,39 @@
+diff --git a/ggml/src/ggml-hexagon/htp/gated-delta-net-ops.c b/ggml/src/ggml-hexagon/htp/gated-delta-net-ops.c
+--- a/ggml/src/ggml-hexagon/htp/gated-delta-net-ops.c
++++ b/ggml/src/ggml-hexagon/htp/gated-delta-net-ops.c
+@@ -806,10 +806,16 @@
+             attn_data += (uint64_t) S_v * H;
+         }
+
++        // Avoid mixing HVX attention stores and DMA state stores in one cache line.
++        // Keep the queue entry for ping-pong scheduling when HVX copies the state.
++        const bool hvx_state_copy = ((uintptr_t) state_out_base & (HEX_L2_LINE_SIZE - 1)) != 0;
++        if (hvx_state_copy) {
++            hvx_copy_f32_uu((uint8_t *) s_out, (const uint8_t *) s_work_curr, S_v * S_v);
++        }
+         // Push real write-back
+         dma_queue_push(dma, dma_make_ptr(s_out, s_work_curr),
+                        S_v * sizeof(float), S_v * sizeof(float),
+-                       S_v * sizeof(float), S_v);
++                       S_v * sizeof(float), hvx_state_copy ? 0 : S_v);
+
+         // Prefetch next block (if any)
+         if (ir_prefetch < total_rows) {
+@@ -1051,10 +1057,16 @@
+             }
+         }
+
++        // Avoid mixing HVX attention stores and DMA state stores in one cache line.
++        // Keep the queue entry for ping-pong scheduling when HVX copies the state.
++        const bool hvx_state_copy = ((uintptr_t) state_out_base & (HEX_L2_LINE_SIZE - 1)) != 0;
++        if (hvx_state_copy) {
++            hvx_copy_f32_uu((uint8_t *) s_out, (const uint8_t *) s_work_curr, S_v * S_v);
++        }
+         // Push real write-back
+         dma_queue_push(dma, dma_make_ptr(s_out, s_work_curr),
+                        S_v * sizeof(float), S_v * sizeof(float),
+-                       S_v * sizeof(float), S_v);
++                       S_v * sizeof(float), hvx_state_copy ? 0 : S_v);
+
+         // Prefetch next block (if any)
+         if (ir_prefetch < total_rows) {
