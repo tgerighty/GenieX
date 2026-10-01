@@ -1,7 +1,7 @@
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
-@@ -10262,6 +10262,29 @@
+@@ -10262,6 +10262,38 @@
          }
      }
 
@@ -27,6 +27,15 @@ diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
 +            GGML_TYPE_F32, 5, 33, 2, 2, 1, false, vector_gate));
 +        test_cases.emplace_back(new test_gated_delta_net(
 +            GGML_TYPE_F32, 3, 3, 1, 2, 2, false, vector_gate));
++    }
++    // Aligned attention with an unaligned boundary between state snapshots.
++    for (bool vector_gate : {false, true}) {
++        test_cases.emplace_back(new test_gated_delta_net(
++            GGML_TYPE_F32, 32, 3, 1, 1, 1, false, vector_gate));
++        for (int64_t snapshots : {1, 2}) {
++            test_cases.emplace_back(new test_gated_delta_net(
++                GGML_TYPE_F32, 8, 3, 4, 1, 1, false, vector_gate, snapshots));
++        }
 +    }
      test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 1, 1));
      test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1));

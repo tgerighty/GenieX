@@ -185,6 +185,7 @@ if(GENIEX_PLUGIN_LLAMA_CPP)
         endif()
         list(APPEND _LLAMA_PATCHES "${_PTQ1_PATCH}")
         list(APPEND _LLAMA_PATCHES "${CMAKE_CURRENT_SOURCE_DIR}/patches/prism-gdn-output-line.patch")
+        list(APPEND _LLAMA_PATCHES "${CMAKE_CURRENT_SOURCE_DIR}/patches/prism-gdn-snapshot-line.patch")
     endif()
     if(GGML_HEXAGON AND _LLAMA_DIR STREQUAL _LLAMA_VENDORED_DIR)
         list(APPEND _LLAMA_PATCHES

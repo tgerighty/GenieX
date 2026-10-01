@@ -1,0 +1,14 @@
+diff --git a/ggml/src/ggml-hexagon/htp/gated-delta-net-ops.c b/ggml/src/ggml-hexagon/htp/gated-delta-net-ops.c
+--- a/ggml/src/ggml-hexagon/htp/gated-delta-net-ops.c
++++ b/ggml/src/ggml-hexagon/htp/gated-delta-net-ops.c
+@@ -808,7 +808,8 @@
+ 
+-        // Avoid mixing HVX attention stores and DMA state stores in one cache line.
++        // Avoid mixing HVX attention/snapshot stores and DMA state stores in one cache line.
+         // Keep the queue entry for ping-pong scheduling when HVX copies the state.
+-        const bool hvx_state_copy = ((uintptr_t) state_out_base & (HEX_L2_LINE_SIZE - 1)) != 0;
++        const bool hvx_state_copy = ((uintptr_t) state_out_base & (HEX_L2_LINE_SIZE - 1)) != 0 ||
++            (K > 1 && ((state_size_per_snap * sizeof(float)) & (HEX_L2_LINE_SIZE - 1)) != 0);
+         if (hvx_state_copy) {
+             hvx_copy_f32_uu((uint8_t *) s_out, (const uint8_t *) s_work_curr, S_v * S_v);
+         }
