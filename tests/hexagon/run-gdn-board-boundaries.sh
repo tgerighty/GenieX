@@ -21,12 +21,12 @@ for workers in 1 4; do
     log=$receipts/workers$workers.log
     result=0
     "$binary" test -b HTP0 -o GATED_DELTA_NET \
-        -p 'head_count=(3|5),head_size=(3|10|31|32|33),n_seq_tokens=(1|2|3),n_seqs=(1|2),v_repeat=(1|2),permuted=0,kda=(0|1),K=(1|2|3),rows_mode=0,cache_rows=-1,raw_gates=0' \
+        -p 'head_count=(3|5|8|32),head_size=(3|10|31|32|33),n_seq_tokens=(1|2|3|4),n_seqs=(1|2),v_repeat=(1|2),permuted=0,kda=(0|1),K=(1|2|3),rows_mode=0,cache_rows=-1,raw_gates=0' \
         -j 1 > "$log" 2>&1 || result=$?
     printf '%s\n' "$result" > "$receipts/workers$workers.exit-status"
     test "$result" = 0
-    grep -q '48/48 tests passed' "$log"
+    grep -q '56/56 tests passed' "$log"
     grep -q "HTP0 hwinfo: threads $workers, hvx $workers," "$log"
-    test "$(grep -c '^ggml-hex: HTP0 profile-op GATED_DELTA_NET|' "$log")" = 48
+    test "$(grep -c '^ggml-hex: HTP0 profile-op GATED_DELTA_NET|' "$log")" = 56
 done
 printf 'GDN board boundary CPU-reference and HTP placement gates passed\n'

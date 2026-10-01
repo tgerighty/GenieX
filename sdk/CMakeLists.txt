@@ -185,6 +185,7 @@ if(GENIEX_PLUGIN_LLAMA_CPP)
         endif()
         list(APPEND _LLAMA_PATCHES "${_PTQ1_PATCH}")
         list(APPEND _LLAMA_PATCHES "${CMAKE_CURRENT_SOURCE_DIR}/patches/prism-gdn-output-line.patch")
+        list(APPEND _LLAMA_PATCHES "${CMAKE_CURRENT_SOURCE_DIR}/patches/prism-gdn-snapshot-line.patch")
     endif()
     if(GGML_HEXAGON AND _LLAMA_DIR STREQUAL _LLAMA_VENDORED_DIR)
         list(APPEND _LLAMA_PATCHES
@@ -199,6 +200,16 @@ if(GENIEX_PLUGIN_LLAMA_CPP)
             "${CMAKE_CURRENT_SOURCE_DIR}/patches/llama-opencl-adreno-xmem-gemm-off.patch")
     endif()
     find_package(Git QUIET REQUIRED)
+    if(GENIEX_PRISM_PTQ1_HEXAGON)
+        # The snapshot fix changes context introduced by the output-line patch.
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} -C "${_LLAMA_DIR}" apply --reverse --check
+                "${CMAKE_CURRENT_SOURCE_DIR}/patches/prism-gdn-snapshot-line.patch"
+            RESULT_VARIABLE _snapshot_reverse_rc OUTPUT_QUIET ERROR_QUIET)
+        if(_snapshot_reverse_rc EQUAL 0)
+            list(REMOVE_ITEM _LLAMA_PATCHES "${CMAKE_CURRENT_SOURCE_DIR}/patches/prism-gdn-output-line.patch")
+        endif()
+    endif()
     foreach(_LLAMA_PATCH ${_LLAMA_PATCHES})
         if(EXISTS "${_LLAMA_PATCH}")
             execute_process(
