@@ -70,6 +70,9 @@ bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void * data, u
 #ifndef PTQ1_WORKER_PADDED_W
 #define PTQ1_WORKER_PADDED_W 0
 #endif
+#ifndef PTQ1_WORKER_RANDOM_ACT
+#define PTQ1_WORKER_RANDOM_ACT 0
+#endif
 
 enum {
     K          = PTQ1_WORKER_K,
@@ -176,9 +179,15 @@ int main(void) {
             weights[ct][kb].qs[0][ct % valid_rows] ^= ct + kb + 1;
         }
     }
+    seed = 7;
     for (unsigned ir = 0; ir < M; ++ir) {
         for (unsigned k = 0; k < K; ++k) {
+#if PTQ1_WORKER_RANDOM_ACT
+            seed = seed * 1664525u + 1013904223u;
+            activations[ir][k] = (float) (seed >> 8) / 8388608.0f - 1.0f;
+#else
             activations[ir][k] = ((int) (k * (29 + ir) % 255) - 127) / 64.0f;
+#endif
         }
         for (unsigned n = 0; n < ROW_STRIDE; ++n) {
             outputs[ir][n] = 12345.0f;

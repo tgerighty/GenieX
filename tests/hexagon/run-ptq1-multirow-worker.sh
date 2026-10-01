@@ -4,6 +4,8 @@
 # Usage:
 #   run-ptq1-multirow-worker.sh /path/to/candidate
 #   PTQ1_WORKER_K=256 PTQ1_WORKER_M=3 PTQ1_WORKER_N=81 run-ptq1-multirow-worker.sh /path/to/candidate
+# Scale-conversion regression (SDK6.6/Tools19.0.07), expected hash 5fab53f3a0f55853:
+#   set -o pipefail; PTQ1_WORKER_RANDOM_ACT=1 PTQ1_WORKER_K=5120 PTQ1_WORKER_M=1 PTQ1_WORKER_N=385 run-ptq1-multirow-worker.sh /path/to/candidate | grep ' hash 5fab53f3a0f55853$'
 set -euo pipefail
 
 cand=${1:?pass the functional-rowchunk patched Prism source root}
@@ -19,6 +21,8 @@ trap 'rm -rf "$build_dir"' EXIT
 includes=(-I"$sdk_inc" -I"$htp" -I"$htp/.." -I"$htp/../.." -I"$sdk/incs" -I"$sdk/incs/stddef"
     -I"$sdk/rtos/qurt/computev75/include/qurt")
 flags=(-mcpu=v75 -mv75 -mhvx=v75 -mhmx -O2)
+# Seeded scale regression must use the production vectorization/LTO flags.
+if [[ ${PTQ1_WORKER_RANDOM_ACT:-0} == 1 ]]; then flags+=(-fvectorize -flto); fi
 
 run_one() {
     local k=$1 m=$2 n=$3 threads=$4 bias=$5 reject=$6
@@ -28,6 +32,7 @@ run_one() {
         -DPTQ1_WORKER_VTCM_REJECT="$reject" \
         -DPTQ1_WORKER_BATCH="${PTQ1_WORKER_BATCH:-0}" \
         -DPTQ1_WORKER_PADDED_W="${PTQ1_WORKER_PADDED_W:-0}" \
+        -DPTQ1_WORKER_RANDOM_ACT="${PTQ1_WORKER_RANDOM_ACT:-0}" \
         "$here/ptq1_multirow_worker_sim.c" -o "$build_dir/worker.o"
     "$tools/hexagon-clang" "${flags[@]}" -c "$htp/dma-queue.c" -o "$build_dir/queue.o" \
         "${includes[@]}" -fpic
