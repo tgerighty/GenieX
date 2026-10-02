@@ -5,7 +5,7 @@
 #include "hmx-utils.h"
 
 enum { PTQ1_HMX_M = 32, PTQ1_HMX_N = 32, PTQ1_HMX_K = 16, PTQ1_HMX_BLOCK_K = 128,
-       PTQ1_HMX_BLOCKS = 40, PTQ1_HMX_PARTS = 8, PTQ1_HMX_TILE = 2048,
+       PTQ1_HMX_PARTS = 8, PTQ1_HMX_TILE = 2048,
        PTQ1_HMX_ACT_OFF = 0, PTQ1_HMX_WT_OFF = 16384, PTQ1_HMX_OUT_OFF = 32768,
        PTQ1_HMX_SCALE_OFF = 49152, PTQ1_HMX_VTCM_BYTES = 65536 };
 _Static_assert(PTQ1_HMX_PARTS * PTQ1_HMX_TILE == PTQ1_HMX_WT_OFF - PTQ1_HMX_ACT_OFF &&
@@ -25,8 +25,9 @@ _Static_assert(sizeof(struct ptq1_hmx_scratch) == 110592, "per-worker auxiliary 
 
 
 static int ptq1_hmx_eligible(uint32_t k, uint32_t m, uint32_t n, unsigned nth) {
-    // Native paired four-row tail/full-width gates beat HVX; narrower batches stay on HVX.
-    return k == 5120 && m >= 4 && m <= PTQ1_HMX_M && n > 0 && nth >= 1 && nth <= 4;
+    // Preserve the K5120 M4 cutoff; K17408 needs separate native timing.
+    return (k == 5120 || k == 17408) && m >= 4 && m <= PTQ1_HMX_M &&
+           n > 0 && nth >= 1 && nth <= 4;
 }
 
 struct ptq1_hmx_dot_job {
@@ -185,15 +186,16 @@ static void ptq1_hmx_accumulate_groups(const geniex_ptq1_tile *tile, const float
 
 static int ptq1_hmx_route_tile(struct htp_mm_context *mmctx, struct ptq1_hmx_scratch *scratch,
                                 const geniex_ptq1_tile *tile, const uint8_t *flat,
-                                size_t flat_stride, unsigned rows, unsigned valid_columns) {
+                                size_t flat_stride, uint32_t k, unsigned rows,
+                                unsigned valid_columns) {
     for (unsigned r = 0; r < rows; ++r) memset(scratch->tile[r], 0, sizeof(scratch->tile[r]));
-    for (unsigned block = 0; block < PTQ1_HMX_BLOCKS; ++block) {
+    for (unsigned block = 0; block < k / PTQ1_HMX_BLOCK_K; ++block) {
         ptq1_hmx_decode_tile(scratch, &tile[block]);
         if (!ptq1_hmx_run_block(mmctx, scratch, block * PTQ1_HMX_PARTS, flat,
                                  flat_stride, rows)) return 0;
         for (unsigned r = 0; r < rows; ++r) {
             float scales[4];
-            geniex_ptq1_flat_scales(scales, flat + r * flat_stride + 5120, block);
+            geniex_ptq1_flat_scales(scales, flat + r * flat_stride + k, block);
             HVX_Vector groups[4];
             for (unsigned group = 0; group < 4; ++group) {
                 const HVX_Vector left = *(const HVX_Vector *)&scratch->partial[2 * group][r][0];
@@ -244,7 +246,7 @@ static void hvx_mm_2d_repacked_ptq1_batch_hmx(unsigned nth, unsigned ith, void *
         const uint32_t col = ct * 32;
         const uint32_t count = MIN(32, ne0 > col ? ne0 - col : 0);
         if (!w_tile || !ptq1_hmx_route_tile(mmctx, scratch, (const geniex_ptq1_tile *)w_tile,
-                         mmctx->vtcm_src1, mmctx->vtcm_src1_stride, ne11, count)) {
+                         mmctx->vtcm_src1, mmctx->vtcm_src1_stride, ne00, ne11, count)) {
             atomic_store(&mmctx->ptq1_hmx_error, 2);
             // Drain prefetch before reporting a failed operation; never try partial-output fallback.
             while (push_ct > ct + 1) { dma_queue_pop(dma_queue); ++ct; }
