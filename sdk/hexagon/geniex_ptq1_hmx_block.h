@@ -25,9 +25,22 @@ _Static_assert(sizeof(struct ptq1_hmx_scratch) == 110592, "per-worker auxiliary 
 
 
 static int ptq1_hmx_eligible(uint32_t k, uint32_t m, uint32_t n, unsigned nth) {
-    // Preserve the K5120 M4 cutoff; K17408 needs separate native timing.
-    return (k == 5120 || k == 17408) && m >= 4 && m <= PTQ1_HMX_M &&
+    return (k == 5120 || k == 6144 || k == 17408) && m >= 4 && m <= PTQ1_HMX_M &&
            n > 0 && nth >= 1 && nth <= 4;
+}
+
+static uint8_t *ptq1_hmx_aux_ptr(const struct htp_ops_context *octx, size_t layout_bytes) {
+    const size_t aux_bytes = sizeof(struct ptq1_hmx_scratch);
+    if (!octx->ctx->hmx_queue || !octx->ctx->vtcm_base ||
+        octx->n_threads < 1 || octx->n_threads > 4 || layout_bytes > SIZE_MAX - 2047)
+        return NULL;
+    const size_t aux_off = (layout_bytes + 2047) & ~(size_t)2047;
+    const uintptr_t base = (uintptr_t)octx->ctx->vtcm_base;
+    if (aux_off > UINTPTR_MAX - base || ((base + aux_off) & 2047u) ||
+        octx->n_threads > (SIZE_MAX - aux_off) / aux_bytes ||
+        aux_off + (size_t)octx->n_threads * aux_bytes > octx->ctx->vtcm_size)
+        return NULL;
+    return (uint8_t *)octx->ctx->vtcm_base + aux_off;
 }
 
 struct ptq1_hmx_dot_job {
