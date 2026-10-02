@@ -715,9 +715,18 @@ index a138f06..e7e7ee0 100644
      // types used internally for repack, dyn.quant, etc
      HTP_TYPE_Q4_0_TILED = 200,
 diff --git a/ggml/src/ggml-hexagon/htp/matmul-ops.c b/ggml/src/ggml-hexagon/htp/matmul-ops.c
-index 9d38546..7f08a47 100644
+index 9d38546..65b2286 100644
 --- a/ggml/src/ggml-hexagon/htp/matmul-ops.c
 +++ b/ggml/src/ggml-hexagon/htp/matmul-ops.c
+@@ -10,6 +10,7 @@
+ #include <math.h>
+ #include <string.h>
+ #include <stdatomic.h>
++#include <qurt_mutex.h>
+-
++
+ #include "hex-dma.h"
+ #include "hvx-utils.h"
 @@ -21,8 +21,13 @@
  #include "ggml-common.h"
  #include "htp-ctx.h"
@@ -732,6 +741,18 @@ index 9d38546..7f08a47 100644
  
  static void hvx_tensor_add_f32_grid(
      const struct htp_tensor * restrict dst,
+@@ -129,5 +135,11 @@ struct htp_mm_context {
+     uint32_t vtcm_src3_size_per_thread;
+     uint32_t vtcm_dst_size_per_thread;
++    // Optional HMX scratch follows the accepted VTCM layout.
++    uint8_t *ptq1_hmx_aux;
++    size_t ptq1_hmx_aux_stride;
++    qurt_mutex_t ptq1_hmx_mutex;
++    atomic_int ptq1_hmx_error;
++
+ };
+
+ // vdelta control to expand first 32 e8m0 values into 32 uint32 elements
 @@ -404,7 +409,7 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
      }                                                                                                                             \
  }
@@ -794,7 +815,7 @@ index 9d38546..7f08a47 100644
      }                                                                                                                             \
                                                                                                                                    \
      int copy_cnt = (int)MIN(src0_end_row, ne0) - (int)src0_start_row;                                                             \
-@@ -896,17 +922,112 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
+@@ -896,17 +922,114 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
      htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, mmctx->quant_ib_first[ith]);
  }
  
@@ -915,6 +936,8 @@ index 9d38546..7f08a47 100644
 +        ct += w1 ? 2 : 1;
 +    }
 +}
++
++#include "geniex_ptq1_hmx_block.h"
  
  
  MATMUL_QKV_2D_REPACKED_IMPL(q4_0,       576,  tiled_vec_dot_q4_0_32x2,  tiled_vec_dot_q4_0_32x1)
@@ -1097,6 +1120,44 @@ index 9d38546..7f08a47 100644
                      default:              return HTP_STATUS_NO_SUPPORT;
                  }
              }
+@@ -1559,6 +1800,27 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
+         return HTP_STATUS_VTCM_TOO_SMALL;
+     }
+-
++
++    // Keep the host VTCM minimum and accepted layout unchanged.
++    atomic_init(&mmctx->ptq1_hmx_error, 0);
++    if (src0->type == HTP_TYPE_PTQ1_0 &&
++        kparams->kernel_type == HTP_MM_KERNEL_HVX_PTQ1_BATCH &&
++        ptq1_hmx_eligible(ne10, ne11, ne0, octx->n_threads)) {
++        const size_t aux_bytes = sizeof(struct ptq1_hmx_scratch);
++        if (octx->ctx->hmx_queue && L.total_bytes <= SIZE_MAX - 2047) {
++            const size_t aux_off = (L.total_bytes + 2047) & ~(size_t)2047;
++            const uintptr_t vtcm_addr = (uintptr_t)octx->ctx->vtcm_base;
++            if (aux_off <= UINTPTR_MAX - vtcm_addr &&
++                ((vtcm_addr + aux_off) & 2047u) == 0 &&
++                octx->n_threads <= (SIZE_MAX - aux_off) / aux_bytes &&
++                aux_off + (size_t)octx->n_threads * aux_bytes <= octx->ctx->vtcm_size) {
++                mmctx->ptq1_hmx_aux = (uint8_t *)octx->ctx->vtcm_base + aux_off;
++                mmctx->ptq1_hmx_aux_stride = aux_bytes;
++                qurt_mutex_init(&mmctx->ptq1_hmx_mutex);
++                matmul_job_func = hvx_mm_2d_repacked_ptq1_batch_hmx;
++            }
++        }
++    }
++
+     uint8_t * const base = (uint8_t *) octx->ctx->vtcm_base;
+     mmctx->vtcm_src1 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src1);
+     mmctx->vtcm_src0 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src0);
+@@ -1593,4 +1858,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
+     worker_pool_run_func(octx->ctx->worker_pool, matmul_job_func, mmctx, octx->n_threads);
+-
++
++    if (mmctx->ptq1_hmx_aux) qurt_mutex_destroy(&mmctx->ptq1_hmx_mutex);
++    if (atomic_load(&mmctx->ptq1_hmx_error)) return HTP_STATUS_INTERNAL_ERR;
++
+     return HTP_STATUS_OK;
+ }
 @@ -3408,6 +3647,68 @@ int op_matmul(struct htp_ops_context * octx) {
          return hmx_mm_op_matmul(octx, kparams);
      }
