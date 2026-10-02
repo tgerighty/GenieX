@@ -26,6 +26,25 @@ void HAP_debug(const char *msg, int level, const char *file, int line) {
     puts(msg);
 }
 
+// The standalone simulator has no QuRT mutex service. Keep the HMX path loud
+// if the dispatcher reaches it; these are link stubs, not lock emulation.
+void qurt_mutex_init(qurt_mutex_t *mutex) {
+    (void) mutex;
+    assert(0 && "unexpected HMX mutex init in PTQ1 worker test");
+}
+void qurt_mutex_destroy(qurt_mutex_t *mutex) {
+    (void) mutex;
+    assert(0 && "unexpected HMX mutex destroy in PTQ1 worker test");
+}
+void qurt_mutex_lock(qurt_mutex_t *mutex) {
+    (void) mutex;
+    assert(0 && "unexpected HMX mutex lock in PTQ1 worker test");
+}
+void qurt_mutex_unlock(qurt_mutex_t *mutex) {
+    (void) mutex;
+    assert(0 && "unexpected HMX mutex unlock in PTQ1 worker test");
+}
+
 // The standalone simulator has no QuRT wake service. PTQ1 must never use
 // the HMX queue: trap if this unrelated path is selected.
 int qurt_futex_wake(void *lock, int n_to_wake) {
@@ -72,6 +91,18 @@ bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void * data, u
 #endif
 #ifndef PTQ1_WORKER_RANDOM_ACT
 #define PTQ1_WORKER_RANDOM_ACT 0
+#endif
+#ifndef PTQ1_WORKER_PREFETCH
+#define PTQ1_WORKER_PREFETCH 2
+#endif
+#ifndef PTQ1_WORKER_Q8_CORRUPT
+#define PTQ1_WORKER_Q8_CORRUPT 0
+#endif
+#if PTQ1_WORKER_PREFETCH != 2 && PTQ1_WORKER_PREFETCH != 4
+#error "PTQ1_WORKER_PREFETCH must be 2 or 4"
+#endif
+#if PTQ1_WORKER_PREFETCH == 4 && (PTQ1_WORKER_M != 1 || PTQ1_WORKER_BATCH)
+#error "prefetch 4 is only valid for the M1 row path"
 #endif
 
 enum {
@@ -199,6 +230,7 @@ int main(void) {
     memcpy(activation_copy, activations, sizeof(activations));
     const uint64_t weight_hash = bytes_hash(weights, sizeof(weights));
     const uint64_t act_hash    = bytes_hash(activations, sizeof(activations));
+    const uint64_t bias_hash   = bytes_hash(bias_vec, sizeof(bias_vec));
 
     struct htp_tensor w = {
         .data = (uint32_t) (uintptr_t) weights,
@@ -244,13 +276,14 @@ int main(void) {
     _Static_assert(NTHREADS == 1, "batch simulator needs one real quant task");
     kparams->kernel_type = HTP_MM_KERNEL_HVX_PTQ1_BATCH;
 #endif
-    kparams->n_prefetch  = 2;
+    kparams->n_prefetch  = PTQ1_WORKER_PREFETCH;
 
     // Host-equivalent M1 VTCM layout even when M>1.
     struct htp_mm_hvx_vtcm_layout layout;
     htp_mm_hvx_vtcm_layout_build(
         &layout, kparams->kernel_type, w.type, K, PTQ1_WORKER_BATCH ? M : 1, NTHREADS, y.nb[1], w.nb[1],
-        htp_mm_q8_0_flat_row_size(K), PTQ1_WORKER_BIAS ? b.nb[1] : 0, 2, false, false, false);
+        htp_mm_q8_0_flat_row_size(K), PTQ1_WORKER_BIAS ? b.nb[1] : 0,
+        PTQ1_WORKER_PREFETCH, false, false, false);
     if (layout.total_bytes + 128 > sizeof(vtcm)) {
         printf("PTQ1 multirow VTCM layout %zu exceeds fixture buffer\n", layout.total_bytes);
         return 1;
@@ -281,6 +314,33 @@ int main(void) {
         printf("op_matmul failed status=%d\n", status);
         return 2;
     }
+#endif
+
+#if PTQ1_WORKER_Q8_CORRUPT
+    vtcm[layout.off_src1] ^= 1;
+#endif
+    if ((size_t) layout.off_src1 + (PTQ1_WORKER_BATCH ? M : 1) * Q8_ROW > layout.total_bytes) {
+        puts("PTQ1 Q8 rows exceed VTCM layout");
+        return 14;
+    }
+    const unsigned q8_rows = PTQ1_WORKER_BATCH ? M : 1;
+    for (unsigned row = 0; row < q8_rows; ++row) {
+        const unsigned ir = PTQ1_WORKER_BATCH ? row : M - 1;
+        memset(q8_row, 0xa5, sizeof(q8_row));
+        quantize_f32_q8_0_flat_kernel((const uint8_t *) activations[ir],
+            q8_row, quant_tmp, K, 1, K * 4, Q8_ROW);
+        if (memcmp(vtcm + layout.off_src1 + row * Q8_ROW, q8_row, Q8_ROW)) {
+            printf("PTQ1 Q8 row byte mismatch row=%u bytes=%u\n", ir, Q8_ROW);
+#if PTQ1_WORKER_Q8_CORRUPT
+            puts("PTQ1 Q8 corruption control detected");
+#endif
+            return 15;
+        }
+    }
+    printf("PTQ1 Q8 exact bytes rows=%u bytes_per_row=%u\n", q8_rows, Q8_ROW);
+#if PTQ1_WORKER_Q8_CORRUPT
+    puts("PTQ1 Q8 corruption control was not detected");
+    return 16;
 #endif
 
 #if PTQ1_WORKER_SCALE_CACHE_CHECK
@@ -324,6 +384,7 @@ int main(void) {
     }
     if (bytes_hash(weights, sizeof(weights)) != weight_hash ||
         bytes_hash(activations, sizeof(activations)) != act_hash ||
+        bytes_hash(bias_vec, sizeof(bias_vec)) != bias_hash ||
         memcmp(activations, activation_copy, sizeof(activations)) != 0) {
         puts("input mutated");
         return 11;

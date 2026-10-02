@@ -10,11 +10,30 @@ set -euo pipefail
 
 cand=${1:?pass the functional-rowchunk patched Prism source root}
 htp=$cand/ggml/src/ggml-hexagon/htp
-sdk_inc=$(cd "$(dirname "$0")/../../sdk/hexagon" && pwd)
+sdk_inc=${PTQ1_WORKER_SDK_INCLUDE:-$(cd "$(dirname "$0")/../../sdk/hexagon" && pwd)}
 here=$(cd "$(dirname "$0")" && pwd)
+[[ -f $sdk_inc/ptq1_hvx.h && -f $sdk_inc/ptq1_tile.h &&
+   -f $sdk_inc/geniex_ptq1_hmx_block.h ]] || {
+    printf 'PTQ1_WORKER_SDK_INCLUDE must contain the PTQ1 headers\n' >&2
+    exit 2
+}
 
 sdk=${HEXAGON_SDK_ROOT:-/opt/hexagon/6.6.0.0}
 tools=${HEXAGON_TOOLS_ROOT:-$sdk/tools/HEXAGON_Tools/19.0.07}/Tools/bin
+prefetch=${PTQ1_WORKER_PREFETCH:-2}
+[[ $prefetch =~ ^(2|4)$ ]] || {
+    printf 'PTQ1_WORKER_PREFETCH must be 2 or 4\n' >&2
+    exit 2
+}
+if [[ $prefetch == 4 && ( ${PTQ1_WORKER_M:-} != 1 || ${PTQ1_WORKER_BATCH:-0} != 0 ) ]]; then
+    printf 'PTQ1_WORKER_PREFETCH=4 requires the M1 row path with batching disabled\n' >&2
+    exit 2
+fi
+if [[ ${PTQ1_WORKER_Q8_CORRUPT:-0} == 1 &&
+      -z ${PTQ1_WORKER_K:-}${PTQ1_WORKER_M:-}${PTQ1_WORKER_N:-} ]]; then
+    printf 'Q8 corruption control requires an explicit worker shape\n' >&2
+    exit 2
+fi
 if [[ -n ${PTQ1_WORKER_BUILD_DIR:-} ]]; then
     build_dir=$PTQ1_WORKER_BUILD_DIR
     mkdir "$build_dir" # Require a new directory; retain the ELF for an audit.
@@ -40,25 +59,41 @@ run_one() {
         -DPTQ1_WORKER_BATCH="${PTQ1_WORKER_BATCH:-0}" \
         -DPTQ1_WORKER_PADDED_W="${PTQ1_WORKER_PADDED_W:-0}" \
         -DPTQ1_WORKER_RANDOM_ACT="${PTQ1_WORKER_RANDOM_ACT:-0}" \
+        -DPTQ1_WORKER_PREFETCH="$prefetch" \
+        -DPTQ1_WORKER_Q8_CORRUPT="${PTQ1_WORKER_Q8_CORRUPT:-0}" \
         -DPTQ1_WORKER_SCALE_CACHE_CHECK="${PTQ1_WORKER_SCALE_CACHE_CHECK:-0}" \
         "$here/ptq1_multirow_worker_sim.c" -o "$build_dir/worker.o"
     "$tools/hexagon-clang" "${flags[@]}" -c "$htp/dma-queue.c" -o "$build_dir/queue.o" \
         "${includes[@]}" -fpic
     "$tools/hexagon-clang" "${flags[@]}" -Wl,--gc-sections -o "$build_dir/worker.elf" \
         "$build_dir/worker.o" "$build_dir/queue.o" -lm
-    local output
-    if ! output=$("$tools/hexagon-sim" --march v75na_1 -r "$build_dir/worker.elf" 2>&1); then
+    local output sim_status=0
+    output=$("$tools/hexagon-sim" --march v75na_1 -r "$build_dir/worker.elf" 2>&1) || sim_status=$?
+    printf '%s\n' "$sim_status" > "$build_dir/worker.exit"
+    if [[ ${PTQ1_WORKER_Q8_CORRUPT:-0} == 1 ]]; then
+        printf '%s\n' "$output" > "$build_dir/worker.log"
+        if (( sim_status == 0 )) ||
+            ! grep -Fxq 'PTQ1 Q8 corruption control detected' <<<"$output"; then
+            printf 'Q8 corruption negative control did not fail at the byte guard\n' >&2
+            exit 1
+        fi
+        grep -Fx 'PTQ1 Q8 corruption control detected' <<<"$output"
+        return 0
+    fi
+    if (( sim_status != 0 )); then
         printf '%s\n' "$output" > "$build_dir/worker.log"
         printf '%s\n' "$output" >&2
         exit 1
     fi
     printf '%s\n' "$output" > "$build_dir/worker.log"
+    printf 'PTQ1_WORKER_PREFETCH=%s\n' "$prefetch"
     if [[ ${PTQ1_WORKER_SCALE_CACHE_CHECK:-0} == 1 ]]; then
         grep -Fx 'PTQ1 table and scratch-gap checks passed' <<<"$output"
     fi
     if [[ $reject == 1 ]]; then
         grep -Fx 'PTQ1 multirow VTCM reject passed' <<<"$output"
     else
+        grep -Eq '^PTQ1 Q8 exact bytes rows=[0-9]+ bytes_per_row=[0-9]+$' <<<"$output"
         grep -F "PTQ1 multirow op_matmul K=$k M=$m N=$n threads=$threads bias=$bias checksum " <<<"$output"
     fi
     grep -F 'Total: Insns=' <<<"$output" || true

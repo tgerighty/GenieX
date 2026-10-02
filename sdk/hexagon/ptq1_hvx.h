@@ -232,5 +232,39 @@ static inline void geniex_ptq1_dot_pair_flat_q8(uint32_t k, float *outputs0, flo
     geniex_ptq1_dot_pair_flat_q8_scaled(k, outputs0, outputs1, weights0, weights1, flat_q8,
         valid_rows0, valid_rows1, scratch, NULL);
 }
+
+static inline void geniex_ptq1_dot_quad_flat_q8_scaled(uint32_t k,
+    float *outputs0, float *outputs1, float *outputs2, float *outputs3,
+    const geniex_ptq1_tile *weights0, const geniex_ptq1_tile *weights1,
+    const geniex_ptq1_tile *weights2, const geniex_ptq1_tile *weights3,
+    const void *flat_q8, unsigned valid_rows0, unsigned valid_rows1,
+    unsigned valid_rows2, unsigned valid_rows3, geniex_ptq1_activation *scratch,
+    const float *prepared_scales) {
+    const int8_t  *quants      = (const int8_t *)flat_q8;
+    const uint8_t *scale_bytes = (const uint8_t *)flat_q8 + k;
+    float          partial[GENIEX_PTQ1_TILE_ROWS];
+
+    assert(k % GENIEX_PTQ1_BLOCK_K == 0);
+    assert(valid_rows0 <= GENIEX_PTQ1_TILE_ROWS && valid_rows1 <= GENIEX_PTQ1_TILE_ROWS &&
+           valid_rows2 <= GENIEX_PTQ1_TILE_ROWS && valid_rows3 <= GENIEX_PTQ1_TILE_ROWS);
+    for (unsigned row = 0; row < valid_rows0; ++row) outputs0[row] = 0.0f;
+    for (unsigned row = 0; row < valid_rows1; ++row) outputs1[row] = 0.0f;
+    for (unsigned row = 0; row < valid_rows2; ++row) outputs2[row] = 0.0f;
+    for (unsigned row = 0; row < valid_rows3; ++row) outputs3[row] = 0.0f;
+    for (uint32_t block = 0; block < k / GENIEX_PTQ1_BLOCK_K; ++block) {
+        float scales[4];
+        if (!prepared_scales) geniex_ptq1_flat_scales(scales, scale_bytes, block);
+        const float *block_scales = prepared_scales ? prepared_scales + 4 * block : scales;
+        geniex_ptq1_prepare_activation(scratch, quants + block * GENIEX_PTQ1_BLOCK_K);
+        geniex_ptq1_dot_tile(&weights0[block], scratch, block_scales, partial);
+        for (unsigned row = 0; row < valid_rows0; ++row) outputs0[row] += partial[row];
+        geniex_ptq1_dot_tile(&weights1[block], scratch, block_scales, partial);
+        for (unsigned row = 0; row < valid_rows1; ++row) outputs1[row] += partial[row];
+        geniex_ptq1_dot_tile(&weights2[block], scratch, block_scales, partial);
+        for (unsigned row = 0; row < valid_rows2; ++row) outputs2[row] += partial[row];
+        geniex_ptq1_dot_tile(&weights3[block], scratch, block_scales, partial);
+        for (unsigned row = 0; row < valid_rows3; ++row) outputs3[row] += partial[row];
+    }
+}
 #endif
 #endif
