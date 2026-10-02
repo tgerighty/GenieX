@@ -121,8 +121,9 @@ enum {
     TILES      = (N + 31) / 32,
     KB         = K / GENIEX_PTQ1_BLOCK_K
 };
-_Static_assert(PTQ1_WORKER_BATCH && NTHREADS >= 1 && NTHREADS <= 4 && K == 5120,
-               "private HMX shape screen requires K5120 true batch and one to four workers");
+_Static_assert(PTQ1_WORKER_BATCH && NTHREADS >= 1 && NTHREADS <= 4 &&
+                   (K == 5120 || K == 17408),
+               "private HMX width screen requires K5120 or K17408 true batch and one to four workers");
 
 static geniex_ptq1_tile weights[TILES][KB] __attribute__((aligned(128)));
 static geniex_ptq1_block blocks[GENIEX_PTQ1_TILE_ROWS * KB];
@@ -209,6 +210,13 @@ int main(void) {
         !ptq1_hmx_eligible(5120, 32, 1, 4) ||
         ptq1_hmx_eligible(5120, 33, 1, 1) ||
         ptq1_hmx_eligible(5121, 4, 1, 1) ||
+        ptq1_hmx_eligible(6144, 4, 1, 1) ||
+        ptq1_hmx_eligible(17407, 4, 1, 1) ||
+        ptq1_hmx_eligible(17408, 3, 1, 1) ||
+        !ptq1_hmx_eligible(17408, 4, 1, 1) ||
+        !ptq1_hmx_eligible(17408, 32, 1, 4) ||
+        ptq1_hmx_eligible(17408, 33, 1, 1) ||
+        ptq1_hmx_eligible(17409, 4, 1, 1) ||
         ptq1_hmx_eligible(5120, 4, 0, 1) ||
         ptq1_hmx_eligible(5120, 4, 1, 0) ||
         ptq1_hmx_eligible(5120, 4, 1, 5)) {
@@ -321,12 +329,14 @@ int main(void) {
     htp_mm_hvx_vtcm_layout_build(
         &layout, kparams->kernel_type, w.type, K, layout_rows, NTHREADS, y.nb[1], w.nb[1],
         htp_mm_q8_0_flat_row_size(K), PTQ1_WORKER_BIAS ? b.nb[1] : 0, 2, false, false, false);
-    if (htp_mm_q8_0_flat_row_size(K) != 5504) return 21;
-    const size_t flat_bytes = layout_rows * htp_mm_q8_0_flat_row_size(K);
+    const size_t q8_stride = htp_mm_q8_0_flat_row_size(K);
+    const size_t expected_q8_stride = K + ((K / 16 + 127) & ~127u);
+    if (q8_stride != expected_q8_stride) return 21;
+    const size_t flat_bytes = layout_rows * q8_stride;
     if (layout.off_src1 + flat_bytes > layout.total_bytes ||
         flat_bytes > layout.src1_bytes) return 29;
     printf("PTQ1 truebatch layout bytes=%zu q8stride=%zu rows=%d tiles=%d\n",
-           layout.total_bytes, htp_mm_q8_0_flat_row_size(K), M, TILES);
+           layout.total_bytes, q8_stride, M, TILES);
     const size_t hmx_offset = (layout.total_bytes + 2047) & ~(size_t)2047;
     aux_bytes = NTHREADS * sizeof(struct ptq1_hmx_scratch);
     const size_t aux_end = hmx_offset + aux_bytes;
@@ -387,7 +397,7 @@ int main(void) {
     const uint64_t accepted_q8_hash = bytes_hash(vtcm + layout.off_src1, flat_bytes);
     memcpy(warmup_outputs, outputs, sizeof(outputs));
     const uint64_t accepted_hash = bytes_hash(outputs, sizeof(outputs));
-    const uint64_t expected_hash = PTQ1_BREADTH_CASE == 0 && M == 30 && N == 64 && NTHREADS == 1 ?
+    const uint64_t expected_hash = K == 5120 && PTQ1_BREADTH_CASE == 0 && M == 30 && N == 64 && NTHREADS == 1 ?
         UINT64_C(0x2744204fe1718231) : (uint64_t) PTQ1_BREADTH_EXPECT_HASH;
     const int pinned = expected_hash != 0;
     if (pinned && accepted_hash != expected_hash) {
@@ -410,7 +420,7 @@ int main(void) {
     const int eligible = ptq1_hmx_eligible(K, M, N, NTHREADS) && !PTQ1_HMX_AUX_REJECT;
     const unsigned partition_rows = ((N + NTHREADS - 1) / NTHREADS + 31) & ~31u;
     const unsigned active_workers = eligible ? (N + partition_rows - 1) / partition_rows : 0;
-    const unsigned expected_jobs = eligible ? TILES * PTQ1_HMX_BLOCKS : 0;
+    const unsigned expected_jobs = eligible ? TILES * KB : 0;
     printf("PTQ1_HMX_ROUTE jobs=%u expected_jobs=%u active_workers=%u unexpected=%u\n",
            jobs, expected_jobs, active_workers, unexpected);
     const int candidate_guard = aux_guards_ok();
@@ -489,11 +499,11 @@ int main(void) {
     printf("PTQ1_BREADTH_%s case=%d K=%d M=%d N=%d threads=%d bias=%d q8stride=%zu checksum %.1f hash=%016llx\n",
            pinned ? "PASS" : "DISCOVERY_MATCH",
            PTQ1_BREADTH_CASE, K, M, N, NTHREADS, PTQ1_WORKER_BIAS,
-           htp_mm_q8_0_flat_row_size(K), checksum, (unsigned long long) hash);
+           q8_stride, checksum, (unsigned long long) hash);
 
     // Simulator Pcycles include the test-only queue observer. They are not board speed.
-    // Run timing only for the pinned M30/N256/T4/case0/bias/full-capacity shape.
-    if (!PTQ1_QUEUE_ERROR_ONLY && M == 30 && N == 256 && NTHREADS == 4 && PTQ1_BREADTH_CASE == 0 &&
+    // Timing requires an accepted-control hash for this exact width and shape.
+    if (!PTQ1_QUEUE_ERROR_ONLY && pinned && M == 30 && N == 256 && NTHREADS == 4 && PTQ1_BREADTH_CASE == 0 &&
         PTQ1_WORKER_BIAS && !PTQ1_WORKER_RANDOM_ACT && !PTQ1_HMX_AUX_REJECT) {
     const unsigned order[3][2] = {{0, 1}, {1, 0}, {0, 1}};
     for (unsigned pair = 0; pair < 3; ++pair) {

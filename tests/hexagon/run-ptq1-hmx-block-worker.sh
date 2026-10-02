@@ -12,32 +12,33 @@ ptq1_inc=${2:-$product_root/sdk/hexagon}
     exit 2
 }
 case_id=${PTQ1_BREADTH_CASE:-0}
+shape_k=${PTQ1_WORKER_K:-5120}
 shape_m=${PTQ1_WORKER_M:-30}
 shape_n=${PTQ1_WORKER_N:-256}
 threads=${PTQ1_WORKER_THREADS:-4}
 aux_reject=${PTQ1_HMX_AUX_REJECT:-0}
 queue_error_only=${PTQ1_QUEUE_ERROR_ONLY:-0}
-[[ $shape_m =~ ^(2|[3-9]|[12][0-9]|3[0-2])$ && $shape_n =~ ^[1-9][0-9]*$ &&
+[[ $shape_k =~ ^(5120|17408)$ && $shape_m =~ ^(2|[3-9]|[12][0-9]|3[0-2])$ && $shape_n =~ ^[1-9][0-9]*$ &&
    $threads =~ ^[1-4]$ && $aux_reject =~ ^[01]$ && $queue_error_only =~ ^[01]$ ]] || {
-    printf 'M must be 2..32, N positive, threads 1..4, auxiliary rejection and queue-error mode 0 or 1\n' >&2
+    printf 'K must be 5120 or 17408; M must be 2..32, N positive, threads 1..4, auxiliary rejection and queue-error mode 0 or 1\n' >&2
     exit 2
 }
 case $case_id in
     0|1|2|3|4) ;;
     *) printf 'PTQ1_BREADTH_CASE must be 0..4\n' >&2; exit 2 ;;
 esac
-if [[ $queue_error_only == 1 && ! ( $case_id == 0 && $shape_m == 30 && $shape_n == 256 && $threads == 4 && $aux_reject == 0 ) ]]; then
+if [[ $queue_error_only == 1 && ! ( $shape_k == 5120 && $case_id == 0 && $shape_m == 30 && $shape_n == 256 && $threads == 4 && $aux_reject == 0 ) ]]; then
     printf 'queue-error mode requires case0 K5120/M30/N256/T4 and full HMX scratch\n' >&2
     exit 2
 fi
 expected_hash=${PTQ1_BREADTH_EXPECT_HASH:-}
-if [[ $case_id == 0 && $shape_m == 30 && $shape_n == 256 && $threads == 4 ]]; then
+if [[ $shape_k == 5120 && $case_id == 0 && $shape_m == 30 && $shape_n == 256 && $threads == 4 ]]; then
     [[ -z $expected_hash || $expected_hash == c8c29a3e05b6b36f ]] || exit 2
     expected_hash=c8c29a3e05b6b36f
-elif [[ $case_id == 0 && $shape_m == 30 && $shape_n == 33 && $threads == 1 ]]; then
+elif [[ $shape_k == 5120 && $case_id == 0 && $shape_m == 30 && $shape_n == 33 && $threads == 1 ]]; then
     [[ -z $expected_hash || $expected_hash == 389fd22bb16290e1 ]] || exit 2
     expected_hash=389fd22bb16290e1
-elif [[ $case_id == 0 && $shape_m == 30 && $shape_n == 64 && $threads == 1 ]]; then
+elif [[ $shape_k == 5120 && $case_id == 0 && $shape_m == 30 && $shape_n == 64 && $threads == 1 ]]; then
     [[ -z $expected_hash || $expected_hash == 2744204fe1718231 ]] || exit 2
     expected_hash=2744204fe1718231
 elif [[ -n $expected_hash ]]; then
@@ -45,6 +46,11 @@ elif [[ -n $expected_hash ]]; then
         printf 'PTQ1_BREADTH_EXPECT_HASH must be 16 lowercase hex digits\n' >&2
         exit 2
     }
+fi
+if [[ $shape_k == 17408 && ( $expected_hash == c8c29a3e05b6b36f ||
+      $expected_hash == 389fd22bb16290e1 || $expected_hash == 2744204fe1718231 ) ]]; then
+    printf 'K17408 cannot use a pinned K5120 accepted-control hash\n' >&2
+    exit 2
 fi
 sdk=${HEXAGON_SDK_ROOT:-/opt/hexagon/6.6.0.0}
 tool_root=${HEXAGON_TOOLS_ROOT:-$sdk/tools/HEXAGON_Tools/19.0.07}/Tools
@@ -59,12 +65,12 @@ check_sha() { printf '%s  %s\n' "$1" "$2" | sha256sum -c -; }
 check_sha b1a061f265ebf799bfaa450daf896bf1a6032638f718fdb3fcae37acc5235ba2 "$product_root/sdk/patches/prism-ptq1-hexagon.patch"
 check_sha 4a17fc39e4432bdf26f64bb3133860a0c52d7a6f271e0884bc44b62b370875f6 "$ptq1_inc/ptq1_hvx.h"
 check_sha a3d7f83e2391054289301d1bdec927894eebc038440b07499798cb7494845dbb "$ptq1_inc/ptq1_tile.h"
-check_sha c259035b94ab933a033de4fe5ce83a70f70af6de55f09de6ecf464415e76f0dd "$ptq1_inc/geniex_ptq1_hmx_block.h"
+check_sha ec1afa93f02dacecfb01ab10dbb9dc12fb19f23a1a91aa40782041c8b00219be "$ptq1_inc/geniex_ptq1_hmx_block.h"
 check_sha c1e9f6e197e515f99301e7c6a9a85ba0ed14af740f618212484cef55967ac4cc "$prism_htp/matmul-ops.c"
-check_sha 934f69eaedfb945ed99732cdee664d56cc7f14ccb0003f07e2016a5a7547cb22 "$here/ptq1_hmx_block_worker_sim.c"
+check_sha 1e72ce55ebe8d3ae1cf341e09ab629106129c1275fc13356454a2a86c8a45c24 "$here/ptq1_hmx_block_worker_sim.c"
 build_dir=$(mktemp -d "${TMPDIR:-/tmp}/geniex-ptq1-hmx-block-worker.XXXXXX")
 exec > >(tee "$build_dir/run.log") 2>&1
-printf 'build_dir=%s\nsource=%s\ncase=%s\nshape_m=%s\nshape_n=%s\n' "$build_dir" "$prism_htp" "$case_id" "$shape_m" "$shape_n"
+printf 'build_dir=%s\nsource=%s\ncase=%s\nshape_k=%s\nshape_m=%s\nshape_n=%s\n' "$build_dir" "$prism_htp" "$case_id" "$shape_k" "$shape_m" "$shape_n"
 printf 'expected_baseline_hash=%s\n' "${expected_hash:-discovery-only}"
 
 includes=(-I"$tool_root/target/hexagon/include" -I"$here" -I"$ptq1_inc" -I"$prism_htp" -I"$prism_htp/.." -I"$prism_htp/../.."
@@ -74,7 +80,7 @@ flags=(-mcpu=v75 -mv75 -mhvx=v75 -mhmx -O2 -g -fvectorize -flto
     -Wall -Werror -fno-zero-initialized-in-bss -G0 -fdata-sections
     -ffunction-sections -fpic)
 flags+=("-DPTQ1_BREADTH_CASE=$case_id")
-flags+=("-DPTQ1_WORKER_M=$shape_m" "-DPTQ1_WORKER_N=$shape_n")
+flags+=("-DPTQ1_WORKER_K=$shape_k" "-DPTQ1_WORKER_M=$shape_m" "-DPTQ1_WORKER_N=$shape_n")
 flags+=("-DPTQ1_QUEUE_ERROR_ONLY=$queue_error_only")
 flags+=("-DPTQ1_WORKER_THREADS=$threads" "-DPTQ1_HMX_AUX_REJECT=$aux_reject")
 if [[ -n $expected_hash ]]; then
@@ -131,7 +137,8 @@ if [[ -n $expected_hash ]]; then
 else
     grep -Eq "^PASS accepted baseline hash [0-9a-f]{16} before candidate case=$case_id discovery$" "$build_dir/sim.log"
 fi
-q8_bytes=$(( (shape_m <= 32 ? shape_m : 1) * 5504 ))
+q8_stride=$((shape_k + (((shape_k / 16 + 127) / 128) * 128)))
+q8_bytes=$(( (shape_m <= 32 ? shape_m : 1) * q8_stride ))
 grep -Eq "^PTQ1_BREADTH_Q8 case=$case_id bytes=$q8_bytes accepted=[0-9a-f]{16} candidate=[0-9a-f]{16}$" "$build_dir/sim.log"
 grep -Fxq 'PTQ1_HMX_ADMISSION_BOUNDARIES_PASS' "$build_dir/sim.log"
 if (( aux_reject || shape_m < 4 )); then
@@ -140,12 +147,12 @@ if (( aux_reject || shape_m < 4 )); then
 else
     partition_rows=$(( ((shape_n + threads - 1) / threads + 31) / 32 * 32 ))
     active_workers=$(( (shape_n + partition_rows - 1) / partition_rows ))
-    jobs=$(( (shape_n + 31) / 32 * 40 ))
+    jobs=$(( (shape_n + 31) / 32 * (shape_k / 128) ))
     grep -Fxq "PTQ1_HMX_ROUTE jobs=$jobs expected_jobs=$jobs active_workers=$active_workers unexpected=0" "$build_dir/sim.log"
     grep -Fxq 'PTQ1_HMX_AUX_FALLBACK forced=0 untouched=0' "$build_dir/sim.log"
 fi
 if [[ $case_id == 1 ]]; then
-    tile_blocks=$(( (shape_n + 31) / 32 * 40 ))
+    tile_blocks=$(( (shape_n + 31) / 32 * (shape_k / 128) ))
     grep -Fxq "PTQ1_BREADTH_SEED_DIFF tiles=$tile_blocks/$tile_blocks" "$build_dir/sim.log"
 fi
 grep -Fq 'PASS changed output bit rejected and restored' "$build_dir/sim.log"
@@ -154,7 +161,7 @@ case_bias=1
 [[ $case_id == 3 ]] && case_bias=0
 marker=DISCOVERY_MATCH
 [[ -n $expected_hash ]] && marker=PASS
-grep -Eq "^PTQ1_BREADTH_$marker case=$case_id K=5120 M=$shape_m N=$shape_n threads=$threads bias=$case_bias q8stride=5504 checksum .* hash=[0-9a-f]{16}$" \
+grep -Eq "^PTQ1_BREADTH_$marker case=$case_id K=$shape_k M=$shape_m N=$shape_n threads=$threads bias=$case_bias q8stride=$q8_stride checksum .* hash=[0-9a-f]{16}$" \
     "$build_dir/sim.log"
 if [[ -n $expected_hash ]]; then
     grep -Eq "^PTQ1_BREADTH_PASS case=$case_id .* hash=$expected_hash$" "$build_dir/sim.log"
@@ -165,7 +172,7 @@ if [[ $queue_error_only == 1 ]]; then
         grep -Fxq "PTQ1_QUEUE_ERROR mode=$mode status=INTERNAL_ERR consumed=1 drained=1" "$build_dir/sim.log"
         grep -Fxq "PTQ1_QUEUE_RECOVERY mode=$mode status=OK output_q8_guards_exact=1" "$build_dir/sim.log"
     done
-elif [[ $case_id == 0 && $shape_m == 30 && $shape_n == 256 && $threads == 4 && $aux_reject == 0 ]]; then
+elif [[ -n $expected_hash && $case_id == 0 && $shape_m == 30 && $shape_n == 256 && $threads == 4 && $aux_reject == 0 ]]; then
     timing_lines=$(grep -Ec '^PTQ1_T4_WORKER_PCYCLES pair=[123] turn=[12] arm=(base|candidate) cycles=[1-9][0-9]*$' "$build_dir/sim.log")
     [[ $timing_lines == 6 ]]
     for spec in '1 1 base' '1 2 candidate' '2 1 candidate' '2 2 base' '3 1 base' '3 2 candidate'; do
