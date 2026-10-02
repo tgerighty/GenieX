@@ -160,15 +160,16 @@ index 2cd015b..044bf5f 100644
              if (try_tiled) {
                  kparams->src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
                  if (src1_nrows < (int)sess->n_threads) {
-@@ -2416,14 +2475,42 @@ static void ggml_hexagon_precompute_hvx_mm_params(
+@@ -2416,14 +2475,43 @@ static void ggml_hexagon_precompute_hvx_mm_params(
              {
                  kparams->src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_mm_q8_1_flat_row_size(ne10) : htp_mm_q8_0_flat_row_size(ne10);
                  kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT;
 +                const uint32_t n_prefetch = wtype == GGML_TYPE_PTQ1_0 ? 2 : 16;
 +                // Retain each PTQ1 weight tile across a bounded prompt batch.
 +                if (wtype == GGML_TYPE_PTQ1_0 && !is_matmul_id && src2_row_size == 0 &&
-+                    dst->op == GGML_OP_MUL_MAT && (ne10 == 5120 || ne10 == 17408) &&
-+                    src1_nrows >= 2 && src1_nrows <= 32 &&
++                    dst->op == GGML_OP_MUL_MAT && (ne10 == 5120 || ne10 == 6144 || ne10 == 17408) &&
++                    src1_nrows >= (ne10 == 6144 ? 4 : 2) && src1_nrows <= 32 &&
++                    (ne10 != 6144 || (sess->n_threads >= 1 && sess->n_threads <= 4)) &&
 +                    ne02 == 1 && ne03 == 1 && ne12 == 1 && ne13 == 1 &&
 +                    src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
 +                    src1->nb[0] == sizeof(float) && src1->nb[1] == (size_t) ne10 * sizeof(float) &&
@@ -1120,7 +1121,7 @@ index 9d38546..65b2286 100644
                      default:              return HTP_STATUS_NO_SUPPORT;
                  }
              }
-@@ -1559,6 +1800,27 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
+@@ -1559,6 +1800,19 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
          return HTP_STATUS_VTCM_TOO_SMALL;
      }
 -
@@ -1130,19 +1131,11 @@ index 9d38546..65b2286 100644
 +    if (src0->type == HTP_TYPE_PTQ1_0 &&
 +        kparams->kernel_type == HTP_MM_KERNEL_HVX_PTQ1_BATCH &&
 +        ptq1_hmx_eligible(ne10, ne11, ne0, octx->n_threads)) {
-+        const size_t aux_bytes = sizeof(struct ptq1_hmx_scratch);
-+        if (octx->ctx->hmx_queue && L.total_bytes <= SIZE_MAX - 2047) {
-+            const size_t aux_off = (L.total_bytes + 2047) & ~(size_t)2047;
-+            const uintptr_t vtcm_addr = (uintptr_t)octx->ctx->vtcm_base;
-+            if (aux_off <= UINTPTR_MAX - vtcm_addr &&
-+                ((vtcm_addr + aux_off) & 2047u) == 0 &&
-+                octx->n_threads <= (SIZE_MAX - aux_off) / aux_bytes &&
-+                aux_off + (size_t)octx->n_threads * aux_bytes <= octx->ctx->vtcm_size) {
-+                mmctx->ptq1_hmx_aux = (uint8_t *)octx->ctx->vtcm_base + aux_off;
-+                mmctx->ptq1_hmx_aux_stride = aux_bytes;
-+                qurt_mutex_init(&mmctx->ptq1_hmx_mutex);
-+                matmul_job_func = hvx_mm_2d_repacked_ptq1_batch_hmx;
-+            }
++        mmctx->ptq1_hmx_aux = ptq1_hmx_aux_ptr(octx, L.total_bytes);
++        if (mmctx->ptq1_hmx_aux) {
++            mmctx->ptq1_hmx_aux_stride = sizeof(struct ptq1_hmx_scratch);
++            qurt_mutex_init(&mmctx->ptq1_hmx_mutex);
++            matmul_job_func = hvx_mm_2d_repacked_ptq1_batch_hmx;
 +        }
 +    }
 +
@@ -1158,7 +1151,7 @@ index 9d38546..65b2286 100644
 +
      return HTP_STATUS_OK;
  }
-@@ -3408,6 +3647,68 @@ int op_matmul(struct htp_ops_context * octx) {
+@@ -3408,6 +3647,94 @@ int op_matmul(struct htp_ops_context * octx) {
          return hmx_mm_op_matmul(octx, kparams);
      }
  
@@ -1183,8 +1176,10 @@ index 9d38546..65b2286 100644
 +        }
 +
 +        const uint32_t nrows = src1->ne[1];
++        struct htp_mm_kernel_params row_params;
++        bool use_row_params = false;
 +        if (kparams->kernel_type == HTP_MM_KERNEL_HVX_PTQ1_BATCH) {
-+            if (nrows > 32 || (src1->ne[0] != 5120 && src1->ne[0] != 17408) ||
++            if (nrows > 32 || (src1->ne[0] != 5120 && src1->ne[0] != 6144 && src1->ne[0] != 17408) ||
 +                src1->nb[1] != (size_t) src1->ne[0] * sizeof(float) ||
 +                kparams->n_prefetch != 2 || octx->n_threads == 0 ||
 +                (octx->src[2] && (octx->src[2]->type != HTP_TYPE_F32 ||
@@ -1201,7 +1196,30 @@ index 9d38546..65b2286 100644
 +            if (batch.total_bytes != (size_t) kparams->vtcm_size) {
 +                return HTP_STATUS_INVAL_PARAMS;
 +            }
-+            return hvx_mm_matmul(octx);
++            if (src1->ne[0] != 6144 ||
++                (ptq1_hmx_eligible(src1->ne[0], nrows, dst->ne[0], octx->n_threads) &&
++                 ptq1_hmx_aux_ptr(octx, batch.total_bytes)))
++                return hvx_mm_matmul(octx);
++            // K6144 has no useful HVX batch fallback. Rebuild the accepted M1 layout.
++            struct htp_mm_hvx_vtcm_layout row;
++            htp_mm_hvx_vtcm_layout_build(&row, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT,
++                src0->type, src1->ne[0], 1, octx->n_threads, dst->nb[1], src0->nb[1],
++                htp_mm_q8_0_flat_row_size(src1->ne[0]),
++                octx->src[2] ? octx->src[2]->nb[1] : 0, 2, false, false, false);
++            if (row.total_bytes > (size_t) kparams->vtcm_size ||
++                row.total_bytes > octx->ctx->vtcm_size) return HTP_STATUS_VTCM_TOO_SMALL;
++            row_params = *kparams;
++            row_params.kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT;
++            row_params.vtcm_size = row.total_bytes;
++            row_params.vtcm_src0_size = row.src0_bytes;
++            row_params.vtcm_src1_size = row.src1_bytes;
++            row_params.vtcm_dst_size = row.dst_bytes;
++            row_params.div_ne12_ne1 = init_fastdiv_values(1);
++            row_params.div_ne1 = init_fastdiv_values(1);
++            row_params.div_r2 = init_fastdiv_values(1);
++            row_params.div_r3 = init_fastdiv_values(1);
++            row_params.div_ne11 = init_fastdiv_values(1);
++            use_row_params = true;
 +        }
 +        for (uint32_t ir = 0; ir < nrows; ++ir) {
 +            struct htp_tensor row_src1 = *src1;
@@ -1214,6 +1232,7 @@ index 9d38546..65b2286 100644
 +            struct htp_ops_context row_octx = *octx;
 +            row_octx.src[1] = &row_src1;
 +            row_octx.dst    = &row_dst;
++            if (use_row_params) memcpy(row_octx.kernel_params, &row_params, sizeof(row_params));
 +            // src[0] weights and src[2] bias stay shared; bias is broadcast.
 +
 +            const int status = hvx_mm_matmul(&row_octx);
@@ -1433,13 +1452,13 @@ index c2ac6a5..d417d5e 100644
  struct test_mul_mat_hadamard : public test_mul_mat {
      test_mul_mat_hadamard(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
              int64_t m = 32, int64_t n = 32, int64_t k = 32,
-@@ -9327,6 +9352,18 @@
+@@ -9327,6 +9352,19 @@
          }
      }
 
 +    // Deterministic PTQ1 prefill: real workers, tails, route boundaries and full widths.
-+    for (int64_t k : {5120, 17408}) {
-+        for (int64_t n : {1, 2, 3, 30, 31, 32, 33}) {
++    for (int64_t k : {5120, 6144, 17408}) {
++        for (int64_t n : {1, 2, 3, 4, 30, 31, 32, 33}) {
 +            for (int64_t m : {33, 81, 129}) {
 +                test_cases.emplace_back(new test_mul_mat_ptq1_batch(m, n, k));
 +            }
@@ -1448,6 +1467,7 @@ index c2ac6a5..d417d5e 100644
 +    test_cases.emplace_back(new test_mul_mat_ptq1_batch(5120, 30, 5120));
 +    test_cases.emplace_back(new test_mul_mat_ptq1_batch(17408, 30, 5120));
 +    test_cases.emplace_back(new test_mul_mat_ptq1_batch(5120, 30, 17408));
++    test_cases.emplace_back(new test_mul_mat_ptq1_batch(5120, 30, 6144));
 +
      // m == 1, with n on both sides of MMVF_MAX_BATCH_SIZE (8): mmvf below, operand swap above
      for (int64_t n : {1, 7, 8, 9, 16, 128, 512}) {

@@ -122,8 +122,8 @@ enum {
     KB         = K / GENIEX_PTQ1_BLOCK_K
 };
 _Static_assert(PTQ1_WORKER_BATCH && NTHREADS >= 1 && NTHREADS <= 4 &&
-                   (K == 5120 || K == 17408),
-               "private HMX width screen requires K5120 or K17408 true batch and one to four workers");
+                   (K == 5120 || K == 6144 || K == 17408),
+               "HMX width screen requires K5120, K6144, or K17408 true batch and one to four workers");
 
 static geniex_ptq1_tile weights[TILES][KB] __attribute__((aligned(128)));
 static geniex_ptq1_block blocks[GENIEX_PTQ1_TILE_ROWS * KB];
@@ -133,6 +133,7 @@ static float activation_copy[M][K];
 static float bias_vec[N] __attribute__((aligned(128)));
 static float outputs[M][ROW_STRIDE] __attribute__((aligned(128)));
 static float warmup_outputs[M][ROW_STRIDE] __attribute__((aligned(128)));
+static uint8_t accepted_q8_rows[M][K + ((K / 16 + 127) & ~127u)] __attribute__((aligned(128)));
 static uint8_t *vtcm;
 static uint8_t queue_storage[NTHREADS][32768] __attribute__((aligned(128)));
 static uint8_t alias_storage[NTHREADS][256] __attribute__((aligned(128)));
@@ -147,6 +148,27 @@ static uint64_t bytes_hash(const void * p, size_t n) {
         hash = (hash ^ b[i]) * UINT64_C(1099511628211);
     }
     return hash;
+}
+
+static void set_row_params(struct htp_mm_kernel_params *params,
+                           const struct htp_mm_hvx_vtcm_layout *layout, size_t q8_stride) {
+    params->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT;
+    params->src1_row_size = q8_stride;
+    params->vtcm_size = layout->total_bytes;
+    params->vtcm_src0_size = layout->src0_bytes;
+    params->vtcm_src1_size = layout->src1_bytes;
+    params->vtcm_src2_size = layout->src2_bytes;
+    params->vtcm_src3_size = layout->src3_bytes;
+    params->vtcm_dst_size = layout->dst_bytes;
+    params->n_prefetch = 2;
+    params->n_hmx = 0;
+    params->div_ne12_ne1 = init_fastdiv_values(1);
+    params->div_ne1 = init_fastdiv_values(1);
+    params->div_r2 = init_fastdiv_values(1);
+    params->div_r3 = init_fastdiv_values(1);
+    params->div_ne11 = init_fastdiv_values(1);
+    params->div_n_act_threads = init_fastdiv_values(1);
+    params->div_ne00_padded = init_fastdiv_values(1);
 }
 
 static int aux_guards_ok(void) {
@@ -210,7 +232,12 @@ int main(void) {
         !ptq1_hmx_eligible(5120, 32, 1, 4) ||
         ptq1_hmx_eligible(5120, 33, 1, 1) ||
         ptq1_hmx_eligible(5121, 4, 1, 1) ||
-        ptq1_hmx_eligible(6144, 4, 1, 1) ||
+        ptq1_hmx_eligible(6144, 1, 1, 1) ||
+        ptq1_hmx_eligible(6144, 3, 1, 1) ||
+        !ptq1_hmx_eligible(6144, 4, 1, 1) ||
+        !ptq1_hmx_eligible(6144, 32, 1, 4) ||
+        ptq1_hmx_eligible(6144, 33, 1, 1) ||
+        ptq1_hmx_eligible(6145, 4, 1, 1) ||
         ptq1_hmx_eligible(17407, 4, 1, 1) ||
         ptq1_hmx_eligible(17408, 3, 1, 1) ||
         !ptq1_hmx_eligible(17408, 4, 1, 1) ||
@@ -322,16 +349,19 @@ int main(void) {
 #endif
     kparams->n_prefetch  = 2;
 
-    // M33 uses the accepted row fallback and its one-row VTCM layout.
+    // K6144 M1 and M33 use the accepted row fallback and one-row VTCM layout.
     struct htp_mm_hvx_vtcm_layout layout;
     const unsigned layout_rows = M <= 32 ? M : 1;
-    if (M > 32) kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT;
+    if (M > 32 || (K == 6144 && M == 1))
+        kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT;
     htp_mm_hvx_vtcm_layout_build(
         &layout, kparams->kernel_type, w.type, K, layout_rows, NTHREADS, y.nb[1], w.nb[1],
         htp_mm_q8_0_flat_row_size(K), PTQ1_WORKER_BIAS ? b.nb[1] : 0, 2, false, false, false);
     const size_t q8_stride = htp_mm_q8_0_flat_row_size(K);
     const size_t expected_q8_stride = K + ((K / 16 + 127) & ~127u);
     if (q8_stride != expected_q8_stride) return 21;
+    if (K == 6144 && (M == 1 || M > 32))
+        set_row_params(kparams, &layout, q8_stride);
     const size_t flat_bytes = layout_rows * q8_stride;
     if (layout.off_src1 + flat_bytes > layout.total_bytes ||
         flat_bytes > layout.src1_bytes) return 29;
@@ -363,6 +393,8 @@ int main(void) {
     qurt_mem_region_attr_get_virtaddr(&attr, &addr);
     vtcm = (uint8_t *)(uintptr_t)addr;
     kparams->vtcm_size = layout.total_bytes;
+    uint8_t kernel_params_before[sizeof(octx.kernel_params)];
+    memcpy(kernel_params_before, octx.kernel_params, sizeof(kernel_params_before));
     memset(vtcm, 0xa5, allocation);
     aux_base = vtcm + hmx_offset;
     const uint64_t clean_aux_hash = bytes_hash(aux_base, aux_bytes);
@@ -391,11 +423,52 @@ int main(void) {
     atomic_store(&unexpected_jobs, 0);
 
     ctx.hmx_queue = NULL;
-    if (op_matmul(&octx) != HTP_STATUS_OK) return 11;
+    struct htp_mm_hvx_vtcm_layout row_layout;
+    htp_mm_hvx_vtcm_layout_build(&row_layout, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT,
+        w.type, K, 1, NTHREADS, y.nb[1], w.nb[1], q8_stride,
+        PTQ1_WORKER_BIAS ? b.nb[1] : 0, 2, false, false, false);
+    if (K == 6144) {
+        if (row_layout.off_src1 + q8_stride > row_layout.total_bytes ||
+            q8_stride > row_layout.src1_bytes || row_layout.total_bytes > ctx.vtcm_size)
+            return 36;
+        for (unsigned r = 0; r < M; ++r) {
+            struct htp_tensor row_x = x, row_y = y;
+            row_x.ne[1] = row_y.ne[1] = 1;
+            row_x.data += r * x.nb[1];
+            row_y.data += r * y.nb[1];
+            struct htp_ops_context row_octx = octx;
+            row_octx.src[1] = &row_x;
+            row_octx.dst = &row_y;
+            struct htp_mm_kernel_params *row_params =
+                (struct htp_mm_kernel_params *)row_octx.kernel_params;
+            set_row_params(row_params, &row_layout, q8_stride);
+            if (op_matmul(&row_octx) != HTP_STATUS_OK) return 37;
+            memcpy(accepted_q8_rows[r], vtcm + row_layout.off_src1, q8_stride);
+        }
+    } else if (op_matmul(&octx) != HTP_STATUS_OK) return 11;
     if (atomic_load(&observed_jobs) || atomic_load(&unexpected_jobs) ||
+        memcmp(octx.kernel_params, kernel_params_before, sizeof(kernel_params_before)) != 0 ||
         bytes_hash(aux_base, aux_bytes) != clean_aux_hash) return 30;
-    const uint64_t accepted_q8_hash = bytes_hash(vtcm + layout.off_src1, flat_bytes);
+    const int k6144_hmx_route = K == 6144 && ptq1_hmx_eligible(K, M, N, NTHREADS) &&
+                                !PTQ1_HMX_AUX_REJECT;
+    const size_t q8_report_bytes = K == 6144 && !k6144_hmx_route ? q8_stride : flat_bytes;
+    const uint64_t accepted_q8_hash = K == 6144 ?
+        bytes_hash(k6144_hmx_route ? (const void *)accepted_q8_rows :
+                   (const void *)accepted_q8_rows[M - 1], q8_report_bytes) :
+        bytes_hash(vtcm + layout.off_src1, flat_bytes);
     memcpy(warmup_outputs, outputs, sizeof(outputs));
+    if (K == 6144) {
+        for (unsigned r = 0; r < M; ++r)
+            for (unsigned c = 0; c < ROW_STRIDE; ++c) outputs[r][c] = 12345.0f;
+        if (op_matmul(&octx) != HTP_STATUS_OK ||
+            memcmp(outputs, warmup_outputs, sizeof(outputs)) != 0 ||
+            memcmp(vtcm + row_layout.off_src1, accepted_q8_rows[M - 1], q8_stride) != 0 ||
+            atomic_load(&observed_jobs) || atomic_load(&unexpected_jobs) ||
+            memcmp(octx.kernel_params, kernel_params_before, sizeof(kernel_params_before)) != 0 ||
+            bytes_hash(aux_base, aux_bytes) != clean_aux_hash)
+            return 38;
+        puts("PTQ1_HMX_NO_QUEUE_FALLBACK_PASS output_padding_last_row_q8_exact=1");
+    }
     const uint64_t accepted_hash = bytes_hash(outputs, sizeof(outputs));
     const uint64_t expected_hash = K == 5120 && PTQ1_BREADTH_CASE == 0 && M == 30 && N == 64 && NTHREADS == 1 ?
         UINT64_C(0x2744204fe1718231) : (uint64_t) PTQ1_BREADTH_EXPECT_HASH;
@@ -424,13 +497,20 @@ int main(void) {
     printf("PTQ1_HMX_ROUTE jobs=%u expected_jobs=%u active_workers=%u unexpected=%u\n",
            jobs, expected_jobs, active_workers, unexpected);
     const int candidate_guard = aux_guards_ok();
-    const uint64_t candidate_q8_hash = bytes_hash(vtcm + layout.off_src1, flat_bytes);
+    const uint64_t candidate_q8_hash = bytes_hash(
+        K == 6144 && !eligible ? vtcm + row_layout.off_src1 : vtcm + layout.off_src1,
+        q8_report_bytes);
+    const int candidate_q8_equal = K == 6144 ?
+        (eligible ? memcmp(vtcm + layout.off_src1, accepted_q8_rows, flat_bytes) == 0 :
+                    memcmp(vtcm + row_layout.off_src1, accepted_q8_rows[M - 1], q8_stride) == 0) :
+        accepted_q8_hash == candidate_q8_hash;
     printf("PTQ1_BREADTH_Q8 case=%d bytes=%zu accepted=%016llx candidate=%016llx\n",
-           PTQ1_BREADTH_CASE, flat_bytes, (unsigned long long) accepted_q8_hash,
+           PTQ1_BREADTH_CASE, q8_report_bytes, (unsigned long long) accepted_q8_hash,
            (unsigned long long) candidate_q8_hash);
     if (candidate_status != HTP_STATUS_OK || unexpected || !candidate_guard ||
         jobs != expected_jobs ||
-        accepted_q8_hash != candidate_q8_hash ||
+        !candidate_q8_equal ||
+        memcmp(octx.kernel_params, kernel_params_before, sizeof(kernel_params_before)) != 0 ||
         memcmp(outputs, warmup_outputs, sizeof(outputs)) != 0) {
         int first = -1;
         uint32_t got = 0, ref = 0;
@@ -445,12 +525,14 @@ int main(void) {
         printf("PTQ1_BREADTH_MISMATCH status=%d guards=%d jobs=%u expected_jobs=%u unexpected=%u q8_equal=%d first=%d row=%d col=%d got=%08x ref=%08x\n",
                candidate_status, candidate_guard,
                jobs, expected_jobs, unexpected,
-               accepted_q8_hash == candidate_q8_hash, first,
+               candidate_q8_equal, first,
                first < 0 ? -1 : first / ROW_STRIDE,
                first < 0 ? -1 : first % ROW_STRIDE,
                (unsigned) got, (unsigned) ref);
         return 24;
     }
+    if (K == 6144 && eligible)
+        printf("PTQ1_HMX_Q8_BYTES_EXACT_PASS bytes=%zu\n", flat_bytes);
     uint32_t changed;
     memcpy(&changed, &outputs[0][0], sizeof(changed));
     changed ^= 1u;
@@ -470,7 +552,8 @@ int main(void) {
             return 3;
         }
     }
-    if (!tensors_equal(&w, &w0) || !tensors_equal(&x, &x0) || !tensors_equal(&y, &y0) ||
+    if (memcmp(octx.kernel_params, kernel_params_before, sizeof(kernel_params_before)) != 0 ||
+        !tensors_equal(&w, &w0) || !tensors_equal(&x, &x0) || !tensors_equal(&y, &y0) ||
         (PTQ1_WORKER_BIAS && !tensors_equal(&b, &b0))) {
         puts("descriptor mutated");
         return 10;
@@ -503,7 +586,7 @@ int main(void) {
 
     // Simulator Pcycles include the test-only queue observer. They are not board speed.
     // Timing requires an accepted-control hash for this exact width and shape.
-    if (!PTQ1_QUEUE_ERROR_ONLY && pinned && M == 30 && N == 256 && NTHREADS == 4 && PTQ1_BREADTH_CASE == 0 &&
+    if (K != 6144 && !PTQ1_QUEUE_ERROR_ONLY && pinned && M == 30 && N == 256 && NTHREADS == 4 && PTQ1_BREADTH_CASE == 0 &&
         PTQ1_WORKER_BIAS && !PTQ1_WORKER_RANDOM_ACT && !PTQ1_HMX_AUX_REJECT) {
     const unsigned order[3][2] = {{0, 1}, {1, 0}, {0, 1}};
     for (unsigned pair = 0; pair < 3; ++pair) {
@@ -559,14 +642,19 @@ int main(void) {
         atomic_store(&fault_mode, mode);
         const int failed = op_matmul(&octx);
         if (failed != HTP_STATUS_INTERNAL_ERR || atomic_load(&fault_mode) != 0 ||
-            atomic_load(&fault_seen) != 1 || !hmx_queue_empty(hmx) || !aux_guards_ok()) return 34;
+            atomic_load(&fault_seen) != 1 || !hmx_queue_empty(hmx) || !aux_guards_ok() ||
+            memcmp(octx.kernel_params, kernel_params_before, sizeof(kernel_params_before)) != 0)
+            return 34;
         printf("PTQ1_QUEUE_ERROR mode=%d status=INTERNAL_ERR consumed=1 drained=1\n", mode);
         for (unsigned r = 0; r < M; ++r)
             for (unsigned c = 0; c < ROW_STRIDE; ++c) outputs[r][c] = 12345.0f;
         if (op_matmul(&octx) != HTP_STATUS_OK || !hmx_queue_empty(hmx) ||
             memcmp(outputs, warmup_outputs, sizeof(outputs)) != 0 ||
-            bytes_hash(vtcm + layout.off_src1, flat_bytes) != accepted_q8_hash ||
-            !aux_guards_ok()) return 35;
+            (K == 6144 ? memcmp(vtcm + layout.off_src1, accepted_q8_rows, flat_bytes) != 0 :
+                         bytes_hash(vtcm + layout.off_src1, flat_bytes) != accepted_q8_hash) ||
+            !aux_guards_ok() ||
+            memcmp(octx.kernel_params, kernel_params_before, sizeof(kernel_params_before)) != 0)
+            return 35;
         printf("PTQ1_QUEUE_RECOVERY mode=%d status=OK output_q8_guards_exact=1\n", mode);
     }
 #endif
