@@ -283,6 +283,35 @@ int main(void) {
     }
 #endif
 
+#if PTQ1_WORKER_SCALE_CACHE_CHECK
+    _Static_assert(PTQ1_WORKER_BATCH && K == 5120 && M >= 2 && M <= 31 &&
+                   NTHREADS == 1 && TILES >= 4 && !PTQ1_WORKER_VTCM_REJECT,
+                   "scale-cache check needs an eligible one-worker batch");
+    // Quant scratch contains the last row below the unchanged activation scratch.
+    const uint8_t *scratch = vtcm + layout.off_dst;
+    const size_t table_end = 256 + (size_t) M * 640;
+    if (layout.dst_bytes < HTP_MM_PTQ1_ACT_SCRATCH_SIZE ||
+        table_end > layout.dst_bytes - HTP_MM_PTQ1_ACT_SCRATCH_SIZE) {
+        puts("PTQ1 scale table exceeds quant scratch");
+        return 14;
+    }
+    float expected_scales[160];
+    for (unsigned ir = 0; ir < M; ++ir) {
+        quantize_f32_q8_0_flat_kernel((const uint8_t *) activations[ir],
+            q8_row, quant_tmp, K, 1, K * 4, Q8_ROW);
+        geniex_ptq1_prepare_flat_scales(expected_scales, q8_row, K);
+        if (memcmp(scratch + 256 + ir * 640, expected_scales, sizeof(expected_scales))) {
+            puts("PTQ1 scale table differs after worker completion");
+            return 12;
+        }
+    }
+    if (memcmp(scratch + table_end, (const uint8_t *) activations[M - 1] + table_end,
+               K * sizeof(float) - table_end)) {
+        puts("PTQ1 gap before activation scratch changed");
+        return 13;
+    }
+    puts("PTQ1 table and scratch-gap checks passed");
+#endif
     for (unsigned i = 0; i < 128; ++i) {
         if (vtcm[layout.total_bytes + i] != 0xa5) {
             return 3;
