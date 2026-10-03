@@ -107,7 +107,7 @@ static inline void geniex_ptq1_dot_tile(
 #ifdef PTQ1_SCALAR_REDUCE
     int16_t lanes[4][2][2 * GENIEX_PTQ1_TILE_ROWS] __attribute__((aligned(128)));
 #else
-    int16_t partial[4][2 * GENIEX_PTQ1_TILE_ROWS] __attribute__((aligned(128)));
+    int32_t groups[4][GENIEX_PTQ1_TILE_ROWS] __attribute__((aligned(128)));
 #endif
 
     for (unsigned b = 0; b < 4; ++b) {
@@ -147,7 +147,9 @@ static inline void geniex_ptq1_dot_tile(
     for (unsigned b = 0; b < 4; ++b) {
         const HVX_Vector lo = Q6_Vh_vadd_VhVh(acc[b][0], Q6_V_vror_VR(acc[b][0], 64));
         const HVX_Vector hi = Q6_Vh_vadd_VhVh(acc[b][1], Q6_V_vror_VR(acc[b][1], 64));
-        *(HVX_Vector *)partial[b] = Q6_Vh_vadd_VhVh(lo, hi);
+        const HVX_Vector reduced = Q6_Vh_vadd_VhVh(lo, hi);
+        const HVX_VectorPair widened = Q6_Ww_vunpack_Vh(reduced);
+        *(HVX_Vector *)groups[b] = Q6_V_lo_W(widened);
     }
 #endif
     for (unsigned row = 0; row < GENIEX_PTQ1_TILE_ROWS; ++row) {
@@ -161,7 +163,7 @@ static inline void geniex_ptq1_dot_tile(
                                   lanes[b][1][lane] + lanes[b][1][32 + lane];
             sum += scales[b] * value;
 #else
-            sum += scales[b] * partial[b][row];
+            sum += scales[b] * groups[b][row];
 #endif
         }
         outputs[row] = geniex_ptq1_half_to_float(tile->d[row]) * sum;
