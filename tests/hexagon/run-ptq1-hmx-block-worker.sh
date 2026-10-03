@@ -65,9 +65,9 @@ check_sha() { printf '%s  %s\n' "$1" "$2" | sha256sum -c -; }
 check_sha 13596a5e9eea8d0c1e2e3dad309ce6f7818c711462db97c5684d46fb794f8a45 "$product_root/sdk/patches/prism-ptq1-hexagon.patch"
 check_sha d8ea07ebbd748e36c7632e59e14ef361d813f8056b2c37e34df33798ade245b0 "$ptq1_inc/ptq1_hvx.h"
 check_sha a3d7f83e2391054289301d1bdec927894eebc038440b07499798cb7494845dbb "$ptq1_inc/ptq1_tile.h"
-check_sha c126c112ffda2c3c69ad24191c58a3adf6b40832256aaea84c607167616f0fb5 "$ptq1_inc/geniex_ptq1_hmx_block.h"
+check_sha 733de6fc74696ce4c087c5002f42dfbd7c7b2fa2f3b1b016cb8dc8f19c1d44ee "$ptq1_inc/geniex_ptq1_hmx_block.h"
 check_sha a214516a256e801103029032994e50446cf6f93a2da8546b09064f449a79a1ee "$prism_htp/matmul-ops.c"
-check_sha 347341b41fd680fe8cb6388e8539de64c723ed930c039c1ea0c17e34e7a172f2 "$here/ptq1_hmx_block_worker_sim.c"
+check_sha 858e4ca4b91b0e8c3b9f406f45207af0d98d018734854c15843042d613fea9bc "$here/ptq1_hmx_block_worker_sim.c"
 build_dir=$(mktemp -d "${TMPDIR:-/tmp}/geniex-ptq1-hmx-block-worker.XXXXXX")
 exec > >(tee "$build_dir/run.log") 2>&1
 printf 'build_dir=%s\nsource=%s\ncase=%s\nshape_k=%s\nshape_m=%s\nshape_n=%s\n' "$build_dir" "$prism_htp" "$case_id" "$shape_k" "$shape_m" "$shape_n"
@@ -82,6 +82,7 @@ flags=(-mcpu=v75 -mv75 -mhvx=v75 -mhmx -O2 -g -fvectorize -flto
 flags+=("-DPTQ1_BREADTH_CASE=$case_id")
 flags+=("-DPTQ1_WORKER_K=$shape_k" "-DPTQ1_WORKER_M=$shape_m" "-DPTQ1_WORKER_N=$shape_n")
 flags+=("-DPTQ1_QUEUE_ERROR_ONLY=$queue_error_only")
+flags+=(-DPTQ1_EXPECT_DIRECT_PACK=1)
 flags+=("-DPTQ1_WORKER_THREADS=$threads" "-DPTQ1_HMX_AUX_REJECT=$aux_reject")
 if [[ -n $expected_hash ]]; then
     flags+=("-DPTQ1_BREADTH_EXPECT_HASH=0x${expected_hash}ULL")
@@ -137,6 +138,9 @@ if [[ -n $expected_hash ]]; then
 else
     grep -Eq "^PASS accepted baseline hash [0-9a-f]{16} before candidate case=$case_id discovery$" "$build_dir/sim.log"
 fi
+grep -Fxq 'PTQ1_HMX_SLOT_NEGATIVE_CONTROL_PASS' "$build_dir/sim.log"
+grep -Fxq 'PTQ1_HMX_SLOT_BYTES_PASS cases=429 scratch_bytes=110592 source_unchanged=1' "$build_dir/sim.log"
+[[ $(grep -Ec '^PTQ1_HMX_SLOT_BYTES rows=([0-9]|[12][0-9]|3[012]) part=(0|[1-9][0-9]*) slot=[0-7] bytes=2048 hash=[0-9a-f]{16}$' "$build_dir/sim.log") == 429 ]]
 q8_stride=$((shape_k + (((shape_k / 16 + 127) / 128) * 128)))
 q8_bytes=$(( (shape_m <= 32 ? shape_m : 1) * q8_stride ))
 if [[ $shape_k == 6144 ]]; then
