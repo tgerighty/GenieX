@@ -165,12 +165,28 @@ static uint16_t signed_q8_half_bits(int8_t value) {
                       ((magnitude << (10 - leading)) & 0x3ffu));
 }
 
+static int guarded_spans_match(const uint8_t *got, const uint8_t *a5, size_t size,
+                               size_t first, size_t first_end,
+                               size_t second, size_t second_end) {
+    if (second < first) {
+        const size_t start = first, end = first_end;
+        first = second;
+        first_end = second_end;
+        second = start;
+        second_end = end;
+    }
+    return !memcmp(got, a5, first) &&
+           !memcmp(got + first_end, a5 + first_end, second - first_end) &&
+           !memcmp(got + second_end, a5 + second_end, size - second_end);
+}
+
 static int check_activation_slots(void) {
     static struct {
         uint8_t before[2048];
         struct ptq1_hmx_scratch body;
         uint8_t after[128];
     } guarded;
+    static uint8_t guard_a5[sizeof(guarded)];
     struct ptq1_hmx_scratch *scratch = &guarded.body;
     static struct {
         uint8_t before[128], rows[32][17537], after[128];
@@ -178,6 +194,7 @@ static int check_activation_slots(void) {
     static const int8_t extremes[] = {-128, -127, -1, 0, 1, 127};
     static const unsigned parts[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 15, 319, 383, 1087};
     _Static_assert(sizeof(*scratch) == 110592, "HMX scratch size changed");
+    memset(guard_a5, 0xa5, sizeof(guard_a5));
     memset(&source, 0xa5, sizeof(source));
     for (unsigned r = 0; r < 32; ++r)
         for (unsigned p = 0; p < sizeof(parts) / sizeof(parts[0]); ++p)
@@ -207,20 +224,46 @@ static int check_activation_slots(void) {
             }
             const uint8_t *guarded_bytes = (const uint8_t *)&guarded;
             const size_t body_start = (const uint8_t *)scratch - guarded_bytes;
-            const size_t act_start = body_start + offsetof(struct ptq1_hmx_scratch, act_rows);
-            const size_t act_end = body_start + offsetof(struct ptq1_hmx_scratch, decoded);
-            for (size_t i = 0; i < sizeof(guarded); ++i)
-                if ((i < body_start + offset || i >= body_start + offset + PTQ1_HMX_TILE) &&
-                    (PTQ1_EXPECT_DIRECT_PACK || i < act_start || i >= act_end) &&
-                    guarded_bytes[i] != 0xa5) {
-                    printf("PTQ1_HMX_SLOT_FAIL rows=%u part=%u scratch_offset=%zu\n",
-                           rows, part, i);
-                    return 0;
-                }
+            const size_t slot_start = body_start + offset;
+            const size_t slot_end = slot_start + PTQ1_HMX_TILE;
+            const size_t act_start = PTQ1_EXPECT_DIRECT_PACK ? sizeof(guarded) :
+                body_start + offsetof(struct ptq1_hmx_scratch, act_rows);
+            const size_t act_end = PTQ1_EXPECT_DIRECT_PACK ? sizeof(guarded) :
+                body_start + offsetof(struct ptq1_hmx_scratch, decoded);
+            if (!guarded_spans_match(guarded_bytes, guard_a5, sizeof(guarded),
+                                     slot_start, slot_end, act_start, act_end)) {
+                printf("PTQ1_HMX_SLOT_FAIL rows=%u part=%u guard\n",
+                       rows, part);
+                return 0;
+            }
             if (rows == 0 && p == 0) {
+                guarded.before[0] ^= 1;
+                if (guarded_spans_match(guarded_bytes, guard_a5, sizeof(guarded),
+                                        slot_start, slot_end, act_start, act_end)) return 0;
+                guarded.before[0] ^= 1;
+                if (!guarded_spans_match(guarded_bytes, guard_a5, sizeof(guarded),
+                                         slot_start, slot_end, act_start, act_end)) return 0;
+                guarded.after[0] ^= 1;
+                if (guarded_spans_match(guarded_bytes, guard_a5, sizeof(guarded),
+                                        slot_start, slot_end, act_start, act_end)) return 0;
+                guarded.after[0] ^= 1;
+                if (!guarded_spans_match(guarded_bytes, guard_a5, sizeof(guarded),
+                                         slot_start, slot_end, act_start, act_end)) return 0;
                 slot[0] ^= 1;
-                if (!memcmp(slot, expected, sizeof(expected))) return 0;
+                if (!memcmp(slot, expected, sizeof(expected)) ||
+                    !guarded_spans_match(guarded_bytes, guard_a5, sizeof(guarded),
+                                          slot_start, slot_end, act_start, act_end)) return 0;
                 slot[0] ^= 1;
+                if (memcmp(slot, expected, sizeof(expected)) ||
+                    !guarded_spans_match(guarded_bytes, guard_a5, sizeof(guarded),
+                                          slot_start, slot_end, act_start, act_end)) return 0;
+                scratch->act_rows[0][0] = 0;
+                if (guarded_spans_match(guarded_bytes, guard_a5, sizeof(guarded),
+                                        slot_start, slot_end, act_start, act_end) !=
+                    !PTQ1_EXPECT_DIRECT_PACK) return 0;
+                memset(&scratch->act_rows[0][0], 0xa5, sizeof(scratch->act_rows[0][0]));
+                if (!guarded_spans_match(guarded_bytes, guard_a5, sizeof(guarded),
+                                         slot_start, slot_end, act_start, act_end)) return 0;
                 puts("PTQ1_HMX_SLOT_NEGATIVE_CONTROL_PASS");
             }
             printf("PTQ1_HMX_SLOT_BYTES rows=%u part=%u slot=%u bytes=%u hash=%016llx\n",
