@@ -22,10 +22,10 @@ for mode in off on production; do
             -O2 -Wall -Wextra -Werror "${flags[@]}" -DGENIEX_PTQ1_QUAD_ORACLE \
             "$here/ptq1_baseline_bits_sim.c" -o "$elf"
         "$tools/hexagon-sim" --march v75na_1 -r "$elf" > "$log" 2>&1
-        test "$(grep -c '^PTQ1_BASELINE_BITS_RAW K=' "$log")" = 27
-        test "$(grep -c '^PTQ1_QUAD_ORACLE_BITS_RAW K=' "$log")" = 54
-        grep -Fxq PTQ1_BASELINE_BITS_CASES=27 "$log"
-        grep -Fxq PTQ1_QUAD_ORACLE_BITS_CASES=54 "$log"
+        test "$(grep -c '^PTQ1_BASELINE_BITS_RAW K=' "$log")" = 36
+        test "$(grep -c '^PTQ1_QUAD_ORACLE_BITS_RAW K=' "$log")" = 72
+        grep -Fxq PTQ1_BASELINE_BITS_CASES=36 "$log"
+        grep -Fxq PTQ1_QUAD_ORACLE_BITS_CASES=72 "$log"
         grep '^PTQ1_BASELINE_BITS' "$log" > "$log.bits"
         grep '^PTQ1_QUAD_ORACLE_BITS_RAW' "$log" > "$log.oracle"
     done
@@ -35,11 +35,12 @@ for mode in off on production; do
         -O2 -Wall -Wextra -Werror "${flags[@]}" -DGENIEX_PTQ1_QUAD_TEST \
         "$here/ptq1_baseline_bits_sim.c" -o "$elf"
     "$tools/hexagon-sim" --march v75na_1 -r "$elf" > "$log" 2>&1
-    test "$(grep -c '^PTQ1_BASELINE_BITS_RAW K=' "$log")" = 27
-    test "$(grep -c '^PTQ1_QUAD_ORACLE_BITS_RAW K=' "$log")" = 54
-    grep -Fxq PTQ1_BASELINE_BITS_CASES=27 "$log"
-    grep -Fxq PTQ1_QUAD_ORACLE_BITS_CASES=54 "$log"
-    grep -Fxq PTQ1_QUAD_BITS_CASES=54 "$log"
+    test "$(grep -c '^PTQ1_BASELINE_BITS_RAW K=' "$log")" = 36
+    test "$(grep -c '^PTQ1_QUAD_ORACLE_BITS_RAW K=' "$log")" = 72
+    grep -Fxq PTQ1_BASELINE_BITS_CASES=36 "$log"
+    grep -Fxq PTQ1_QUAD_ORACLE_BITS_CASES=72 "$log"
+    grep -Fxq PTQ1_QUAD_BITS_CASES=72 "$log"
+    grep -Fxq PTQ1_EIGHT_BITS_CASES=72 "$log"
     grep '^PTQ1_BASELINE_BITS' "$log" > "$log.bits"
     grep '^PTQ1_QUAD_ORACLE_BITS_RAW' "$log" > "$log.oracle"
     cmp "$build_dir/base-$mode.log.bits" "$build_dir/candidate-$mode.log.bits"
@@ -47,5 +48,5 @@ for mode in off on production; do
     cmp "$build_dir/base-$mode.log.oracle" "$build_dir/candidate-$mode.log.oracle"
     cmp "$build_dir/base-$mode.log.oracle" "$log.oracle"
 done
-printf 'PTQ1_BASELINE_AND_QUAD_OUTPUT_WORD_AND_PADDING_COMPARISONS_PASS\n'
+printf 'PTQ1_BASELINE_QUAD_AND_EIGHT_OUTPUT_WORD_AND_PADDING_COMPARISONS_PASS\n'
 printf 'Receipts: %s\n' "$build_dir"
