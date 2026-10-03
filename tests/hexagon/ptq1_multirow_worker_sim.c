@@ -98,11 +98,11 @@ bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void * data, u
 #ifndef PTQ1_WORKER_Q8_CORRUPT
 #define PTQ1_WORKER_Q8_CORRUPT 0
 #endif
-#if PTQ1_WORKER_PREFETCH != 2 && PTQ1_WORKER_PREFETCH != 4
-#error "PTQ1_WORKER_PREFETCH must be 2 or 4"
+#if PTQ1_WORKER_PREFETCH != 2 && PTQ1_WORKER_PREFETCH != 4 && PTQ1_WORKER_PREFETCH != 8
+#error "PTQ1_WORKER_PREFETCH must be 2, 4, or 8"
 #endif
-#if PTQ1_WORKER_PREFETCH == 4 && (PTQ1_WORKER_M != 1 || PTQ1_WORKER_BATCH)
-#error "prefetch 4 is only valid for the M1 row path"
+#if PTQ1_WORKER_PREFETCH > 2 && (PTQ1_WORKER_M != 1 || PTQ1_WORKER_BATCH)
+#error "prefetch 4 or 8 is only valid for the M1 row path"
 #endif
 
 enum {
@@ -298,7 +298,8 @@ int main(void) {
 #endif
     for (unsigned t = 0; t < NTHREADS; ++t) {
         ctx.dma[t] = dma_queue_init(
-            queue_storage[t], 8, (uintptr_t) (vtcm + layout.off_src0), layout.src0_bytes, &ctx.trace[t]);
+            queue_storage[t], PTQ1_WORKER_PREFETCH == 8 ? 16 : 8,
+            (uintptr_t) (vtcm + layout.off_src0), layout.src0_bytes, &ctx.trace[t]);
     }
 
     const int status = op_matmul(&octx);

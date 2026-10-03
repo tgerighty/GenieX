@@ -15,10 +15,13 @@ static float prepared_scales[4 * MAX_BLOCKS];
 
 int main(void) {
     const uint16_t scales[] = {0x3555, 0x3c01, 0xb2ab, 0xbc03};
-    const unsigned lengths[] = {256, 5120, 17408};
+    const unsigned lengths[] = {256, 5120, 6144, 17408};
     const unsigned tails[] = {3, 31, 32};
     unsigned cases = 0;
-    for (unsigned ki = 0; ki < 3; ++ki) {
+#ifdef GENIEX_PTQ1_QUAD_TEST
+    unsigned eight_cases = 0;
+#endif
+    for (unsigned ki = 0; ki < 4; ++ki) {
         const unsigned k = lengths[ki];
         for (unsigned mode = 0; mode < 3; ++mode) {
             for (unsigned i = 0; i < k; ++i)
@@ -104,6 +107,30 @@ int main(void) {
                             k, valid, mode, cached);
                         return 1;
                     }
+                    const geniex_ptq1_tile *eight_weights[8] = {
+                        weights[0], weights[1], weights[1], weights[0],
+                        weights[1], weights[0], weights[0], weights[1]};
+                    float eight_expected[8 * ROWS];
+                    float eight_actual_storage[8 * ROWS + 2];
+                    float *eight_actual = eight_actual_storage + 1;
+                    eight_actual_storage[0] = 12345.0f;
+                    eight_actual_storage[8 * ROWS + 1] = 12345.0f;
+                    for (unsigned pair = 0; pair < 4; ++pair)
+                        geniex_ptq1_dot_pair_flat_q8_scaled(k,
+                            eight_expected + 2 * pair * ROWS,
+                            eight_expected + (2 * pair + 1) * ROWS,
+                            eight_weights[2 * pair], eight_weights[2 * pair + 1],
+                            flat, ROWS, ROWS, &scratch, cache);
+                    geniex_ptq1_dot_eight_flat_q8_scaled(k, eight_actual,
+                        eight_weights, flat, &scratch, cache);
+                    if (memcmp(eight_expected, eight_actual, sizeof(eight_expected)) ||
+                        eight_actual_storage[0] != 12345.0f ||
+                        eight_actual_storage[8 * ROWS + 1] != 12345.0f) {
+                        fprintf(stderr, "PTQ1_EIGHT_BITS_FAIL K=%u valid=%u mode=%u cached=%u\n",
+                            k, valid, mode, cached);
+                        return 1;
+                    }
+                    ++eight_cases;
 #endif
                 }
 #endif
@@ -116,6 +143,7 @@ int main(void) {
     printf("PTQ1_QUAD_ORACLE_BITS_CASES=%u\n", cases * 2);
 #ifdef GENIEX_PTQ1_QUAD_TEST
     printf("PTQ1_QUAD_BITS_CASES=%u\n", cases * 2);
+    printf("PTQ1_EIGHT_BITS_CASES=%u\n", eight_cases);
 #endif
 #endif
     return 0;

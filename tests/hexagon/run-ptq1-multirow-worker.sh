@@ -21,12 +21,12 @@ here=$(cd "$(dirname "$0")" && pwd)
 sdk=${HEXAGON_SDK_ROOT:-/opt/hexagon/6.6.0.0}
 tools=${HEXAGON_TOOLS_ROOT:-$sdk/tools/HEXAGON_Tools/19.0.07}/Tools/bin
 prefetch=${PTQ1_WORKER_PREFETCH:-2}
-[[ $prefetch =~ ^(2|4)$ ]] || {
-    printf 'PTQ1_WORKER_PREFETCH must be 2 or 4\n' >&2
+[[ $prefetch =~ ^(2|4|8)$ ]] || {
+    printf 'PTQ1_WORKER_PREFETCH must be 2, 4, or 8\n' >&2
     exit 2
 }
-if [[ $prefetch == 4 && ( ${PTQ1_WORKER_M:-} != 1 || ${PTQ1_WORKER_BATCH:-0} != 0 ) ]]; then
-    printf 'PTQ1_WORKER_PREFETCH=4 requires the M1 row path with batching disabled\n' >&2
+if [[ $prefetch != 2 && ( ${PTQ1_WORKER_M:-} != 1 || ${PTQ1_WORKER_BATCH:-0} != 0 ) ]]; then
+    printf 'PTQ1_WORKER_PREFETCH=4 or 8 requires the M1 row path with batching disabled\n' >&2
     exit 2
 fi
 if [[ ${PTQ1_WORKER_Q8_CORRUPT:-0} == 1 &&
