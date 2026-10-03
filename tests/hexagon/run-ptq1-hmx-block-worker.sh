@@ -62,7 +62,7 @@ target=$tool_root/target/hexagon/lib/v75/G0
 [[ -x $tools/hexagon-clang && -x $tools/hexagon-sim ]] || exit 2
 check_sha() { printf '%s  %s\n' "$1" "$2" | sha256sum -c -; }
 # The matmul hash is the strict-applied product patch postimage, not a prototype source.
-check_sha bdde158617ce8dccfad0f6e5e8d75d72114e1bf2b5104e5b4164b69f17243206 "$product_root/sdk/patches/prism-ptq1-hexagon.patch"
+check_sha 13596a5e9eea8d0c1e2e3dad309ce6f7818c711462db97c5684d46fb794f8a45 "$product_root/sdk/patches/prism-ptq1-hexagon.patch"
 check_sha d8ea07ebbd748e36c7632e59e14ef361d813f8056b2c37e34df33798ade245b0 "$ptq1_inc/ptq1_hvx.h"
 check_sha a3d7f83e2391054289301d1bdec927894eebc038440b07499798cb7494845dbb "$ptq1_inc/ptq1_tile.h"
 check_sha c126c112ffda2c3c69ad24191c58a3adf6b40832256aaea84c607167616f0fb5 "$ptq1_inc/geniex_ptq1_hmx_block.h"
