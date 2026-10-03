@@ -12,6 +12,7 @@ static bool fixture_observe_hmx_queue_push(hmx_queue_t q, struct hmx_queue_desc 
 
 #include <stdio.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <string.h>
 
 static hmx_queue_t observed_queue;
@@ -148,6 +149,88 @@ static uint64_t bytes_hash(const void * p, size_t n) {
         hash = (hash ^ b[i]) * UINT64_C(1099511628211);
     }
     return hash;
+}
+
+#ifndef PTQ1_EXPECT_DIRECT_PACK
+#define PTQ1_EXPECT_DIRECT_PACK 0
+#endif
+
+static uint16_t signed_q8_half_bits(int8_t value) {
+    if (!value) return 0;
+    const unsigned magnitude = value < 0 ? -(int)value : value;
+    unsigned leading = 0;
+    while (magnitude >> (leading + 1)) ++leading;
+    return (uint16_t)((value < 0 ? 0x8000u : 0u) |
+                      ((leading + 15) << 10) |
+                      ((magnitude << (10 - leading)) & 0x3ffu));
+}
+
+static int check_activation_slots(void) {
+    static struct {
+        uint8_t before[2048];
+        struct ptq1_hmx_scratch body;
+        uint8_t after[128];
+    } guarded;
+    struct ptq1_hmx_scratch *scratch = &guarded.body;
+    static struct {
+        uint8_t before[128], rows[32][17537], after[128];
+    } source;
+    static const int8_t extremes[] = {-128, -127, -1, 0, 1, 127};
+    static const unsigned parts[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 15, 319, 383, 1087};
+    _Static_assert(sizeof(*scratch) == 110592, "HMX scratch size changed");
+    memset(&source, 0xa5, sizeof(source));
+    for (unsigned r = 0; r < 32; ++r)
+        for (unsigned p = 0; p < sizeof(parts) / sizeof(parts[0]); ++p)
+            for (unsigned k = 0; k < 16; ++k)
+                source.rows[r][1 + parts[p] * 16 + k] = (uint8_t)(k < 6 ?
+                    extremes[(k + r + p) % 6] : (int8_t)(r * 7 + p * 19 + k * 11));
+    const uint64_t source_hash = bytes_hash(&source, sizeof(source));
+    for (unsigned rows = 0; rows <= 32; ++rows) {
+        for (unsigned p = 0; p < sizeof(parts) / sizeof(parts[0]); ++p) {
+            const unsigned part = parts[p];
+            const unsigned slot_index = part % PTQ1_HMX_PARTS;
+            uint16_t expected[PTQ1_HMX_TILE / 2] = {0};
+            for (unsigned r = 0; r < rows; ++r)
+                for (unsigned k = 0; k < 16; ++k)
+                    expected[(r / 2) * 64 + k * 2 + (r & 1)] = signed_q8_half_bits(
+                        (int8_t)source.rows[r][1 + part * 16 + k]);
+            memset(&guarded, 0xa5, sizeof(guarded));
+            ptq1_hmx_pack_activation(scratch, part, slot_index,
+                                     rows ? &source.rows[0][1] : NULL,
+                                     sizeof(source.rows[0]), rows);
+            const unsigned offset = PTQ1_HMX_ACT_OFF + slot_index * PTQ1_HMX_TILE;
+            uint8_t *slot = scratch->vtcm + offset;
+            if (memcmp(slot, expected, sizeof(expected))) {
+                printf("PTQ1_HMX_SLOT_FAIL rows=%u part=%u slot=%u bytes\n",
+                       rows, part, slot_index);
+                return 0;
+            }
+            const uint8_t *guarded_bytes = (const uint8_t *)&guarded;
+            const size_t body_start = (const uint8_t *)scratch - guarded_bytes;
+            const size_t act_start = body_start + offsetof(struct ptq1_hmx_scratch, act_rows);
+            const size_t act_end = body_start + offsetof(struct ptq1_hmx_scratch, decoded);
+            for (size_t i = 0; i < sizeof(guarded); ++i)
+                if ((i < body_start + offset || i >= body_start + offset + PTQ1_HMX_TILE) &&
+                    (PTQ1_EXPECT_DIRECT_PACK || i < act_start || i >= act_end) &&
+                    guarded_bytes[i] != 0xa5) {
+                    printf("PTQ1_HMX_SLOT_FAIL rows=%u part=%u scratch_offset=%zu\n",
+                           rows, part, i);
+                    return 0;
+                }
+            if (rows == 0 && p == 0) {
+                slot[0] ^= 1;
+                if (!memcmp(slot, expected, sizeof(expected))) return 0;
+                slot[0] ^= 1;
+                puts("PTQ1_HMX_SLOT_NEGATIVE_CONTROL_PASS");
+            }
+            printf("PTQ1_HMX_SLOT_BYTES rows=%u part=%u slot=%u bytes=%u hash=%016llx\n",
+                   rows, part, slot_index, PTQ1_HMX_TILE,
+                   (unsigned long long)bytes_hash(slot, PTQ1_HMX_TILE));
+        }
+    }
+    if (bytes_hash(&source, sizeof(source)) != source_hash) return 0;
+    puts("PTQ1_HMX_SLOT_BYTES_PASS cases=429 scratch_bytes=110592 source_unchanged=1");
+    return 1;
 }
 
 static void set_row_params(struct htp_mm_kernel_params *params,
@@ -414,6 +497,7 @@ int main(void) {
         ctx.dma[t] = dma_queue_alias_init(alias_storage[t], ctx.dma_cached[t], 1);
     }
     if (qurt_hvx_lock(QURT_HVX_MODE_128B) != QURT_EOK) return 16;
+    if (!check_activation_slots()) return 39;
     hmx_queue_t hmx = hmx_queue_init(hmx_queue_storage, 8, 32768, 0,
                                      &ctx.trace[HTP_MAX_NTHREADS]);
     if (!hmx) return 22;

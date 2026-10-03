@@ -84,19 +84,20 @@ static void ptq1_hmx_pack_activation(struct ptq1_hmx_scratch *scratch,
                                       unsigned rows) {
     const HVX_VectorPred active = Q6_Q_vsetq_R(2 * PTQ1_HMX_K);
     const HVX_Vector zero = Q6_V_vzero();
-    for (unsigned r = 0; r < PTQ1_HMX_M; ++r) {
-        if (r >= rows) {
-            *(HVX_Vector *)scratch->act_rows[r] = zero;
-            continue;
-        }
-        const HVX_Vector bytes = hvx_vmemu(flat + r * flat_stride + part * PTQ1_HMX_K);
-        const HVX_VectorPair integers = Q6_Wh_vunpack_Vb(bytes);
-        const HVX_Vector halves = Q6_Vhf_equals_Vh(Q6_V_lo_W(integers));
-        *(HVX_Vector *)scratch->act_rows[r] = Q6_V_vmux_QVV(active, halves, zero);
-    }
     for (unsigned r = 0; r < PTQ1_HMX_M; r += 2) {
-        const HVX_Vector even = *(const HVX_Vector *)scratch->act_rows[r];
-        const HVX_Vector odd = *(const HVX_Vector *)scratch->act_rows[r + 1];
+        HVX_Vector even = zero, odd = zero;
+        if (r < rows) {
+            const HVX_Vector bytes = hvx_vmemu(flat + r * flat_stride + part * PTQ1_HMX_K);
+            const HVX_VectorPair integers = Q6_Wh_vunpack_Vb(bytes);
+            const HVX_Vector halves = Q6_Vhf_equals_Vh(Q6_V_lo_W(integers));
+            even = Q6_V_vmux_QVV(active, halves, zero);
+        }
+        if (r + 1 < rows) {
+            const HVX_Vector bytes = hvx_vmemu(flat + (r + 1) * flat_stride + part * PTQ1_HMX_K);
+            const HVX_VectorPair integers = Q6_Wh_vunpack_Vb(bytes);
+            const HVX_Vector halves = Q6_Vhf_equals_Vh(Q6_V_lo_W(integers));
+            odd = Q6_V_vmux_QVV(active, halves, zero);
+        }
         const HVX_VectorPair pair = Q6_W_vshuff_VVR(odd, even, -2);
         ((HVX_Vector *)(scratch->vtcm + PTQ1_HMX_ACT_OFF + slot * PTQ1_HMX_TILE))[r / 2] = Q6_V_lo_W(pair);
     }
