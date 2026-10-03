@@ -67,7 +67,7 @@ check_sha c7722839fb5253a5b5ef63eb87011b19371c01815b67867f7aa5913c0a6c7bf5 "$ptq
 check_sha a3d7f83e2391054289301d1bdec927894eebc038440b07499798cb7494845dbb "$ptq1_inc/ptq1_tile.h"
 check_sha 733de6fc74696ce4c087c5002f42dfbd7c7b2fa2f3b1b016cb8dc8f19c1d44ee "$ptq1_inc/geniex_ptq1_hmx_block.h"
 check_sha d9a2bf4117487a353deced8a67a7df01c6134b766ceec156de7a11bd5f9c73ac "$prism_htp/matmul-ops.c"
-check_sha 858e4ca4b91b0e8c3b9f406f45207af0d98d018734854c15843042d613fea9bc "$here/ptq1_hmx_block_worker_sim.c"
+check_sha 95a80e54faf17e3b9fb32c70134fe0065e4cebb32f2e43068ef9a7dcb5cbfa3f "$here/ptq1_hmx_block_worker_sim.c"
 build_dir=$(mktemp -d "${TMPDIR:-/tmp}/geniex-ptq1-hmx-block-worker.XXXXXX")
 exec > >(tee "$build_dir/run.log") 2>&1
 printf 'build_dir=%s\nsource=%s\ncase=%s\nshape_k=%s\nshape_m=%s\nshape_n=%s\n' "$build_dir" "$prism_htp" "$case_id" "$shape_k" "$shape_m" "$shape_n"
