@@ -203,7 +203,7 @@ index 2cd015b..044bf5f 100644
                  );
 +
 +                // Four live weight tiles share M1 activation preparation when VTCM permits.
-+                if (wtype == GGML_TYPE_PTQ1_0 && src1_nrows == 1 && (ne10 == 5120 || ne10 == 17408) &&
++                if (wtype == GGML_TYPE_PTQ1_0 && src1_nrows == 1 && (ne10 == 5120 || ne10 == 6144 || ne10 == 17408) &&
 +                    sess->n_threads > 0 && (uint64_t) dst->ne[0] >= 128u * sess->n_threads) {
 +                    struct htp_mm_hvx_vtcm_layout quad;
 +                    htp_mm_hvx_vtcm_layout_build(
